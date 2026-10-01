@@ -91,7 +91,7 @@ and disk usage problems surface, so it comes before the GPU steps.
       footprint from resolution, frame count and scale; warn before starting
       and mention `--frame-format jpg`. Adds `--dry-run`, which prints the
       planned run, its encoder chain and its disk cost, then exits.
-- [ ] `test(e2e): add extract-encode round-trip test` — extract and re-encode
+- [x] `test(e2e): add extract-encode round-trip test` — extract and re-encode
       the fixture, then assert duration and audio presence survive.
 
 ## M3 — Upscale (Real-ESRGAN NCNN)

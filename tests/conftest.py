@@ -60,3 +60,26 @@ def silent_video() -> Path:
             "-c:v", "libx264",
         ],
     )
+
+
+@pytest.fixture(scope="session")
+def vfr_video() -> Path:
+    """2 seconds of 160x120 with variable frame timing and audio.
+
+    Built by dropping two of every three frames and rewriting the
+    presentation timestamps, which is what makes r_frame_rate and
+    avg_frame_rate disagree the way a phone recording does.
+    """
+    if not HAS_FFMPEG:
+        pytest.skip("ffmpeg/ffprobe not on PATH")
+    return _generate(
+        FIXTURE_DIR / "vfr.mp4",
+        [
+            "-f", "lavfi", "-i", "testsrc=size=160x120:rate=30",
+            "-f", "lavfi", "-i", "sine=frequency=440",
+            "-t", "2",
+            "-vf", "select='not(mod(n,3))',setpts=N/(10*TB)",
+            "-fps_mode", "vfr",
+            "-c:v", "libx264", "-c:a", "aac",
+        ],
+    )
