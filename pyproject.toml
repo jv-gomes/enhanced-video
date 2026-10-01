@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "videoenhance"
+version = "0.1.0"
+description = "Upscale and interpolate video on AMD GPUs using NCNN + Vulkan (no CUDA)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "João Vitor" }]
+keywords = ["video", "upscale", "interpolation", "real-esrgan", "rife", "vulkan", "ncnn", "amd"]
+dependencies = ["tqdm>=4.65"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4", "ruff>=0.4"]
+
+[project.scripts]
+videoenhance = "videoenhance.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

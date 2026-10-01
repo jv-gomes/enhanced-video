@@ -35,7 +35,7 @@ GPU work (M3, M4) only lands after the cheap end-to-end plumbing (M2) is proven.
 Goal: a runnable CLI that can inspect a video and tell the user whether their
 machine is ready, before any GPU code exists.
 
-- [ ] `chore: add src layout package and pyproject` — `src/videoenhance/`,
+- [x] `chore: add src layout package and pyproject` — `src/videoenhance/`,
       `pyproject.toml` (setuptools, src layout, `requires-python = ">=3.10"`,
       `tqdm`), `requirements.txt`. Makes
       `python -m videoenhance.cli` work after `pip install -e .`.
