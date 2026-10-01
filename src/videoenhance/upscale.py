@@ -15,8 +15,8 @@ from pathlib import Path
 
 from . import config
 from .config import Binaries, binaries
-from .pipeline import count_frames_on_disk, stage_is_done
 from .process import ToolError, run
+from .workdir import count_frames_on_disk, stage_is_done
 
 logger = logging.getLogger(__name__)
 

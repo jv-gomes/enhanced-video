@@ -17,9 +17,9 @@ from pathlib import Path
 
 from . import config
 from .config import Binaries, binaries
-from .pipeline import WorkDir, count_frames_on_disk, frame_pattern, stage_is_done
 from .probe import VideoInfo, probe
 from .process import run
+from .workdir import WorkDir, count_frames_on_disk, frame_pattern, stage_is_done
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +43,8 @@ class ExtractResult:
     audio_source: Path
     has_audio: bool
     normalised: bool = False
+    #: True when the frames were already on disk and nothing was re-extracted.
+    skipped: bool = False
 
     @property
     def duration(self) -> float:
@@ -163,7 +165,7 @@ def extract(
         fps = target_cfr(info)
         normalised = True
 
-    def result(count: int) -> ExtractResult:
+    def result(count: int, skipped: bool = False) -> ExtractResult:
         return ExtractResult(
             frames_dir=out_dir,
             frame_count=count,
@@ -171,10 +173,11 @@ def extract(
             audio_source=source,
             has_audio=info.has_audio,
             normalised=normalised,
+            skipped=skipped,
         )
 
     if not force and stage_is_done("extract", out_dir, info.nb_frames, frame_format):
-        return result(count_frames_on_disk(out_dir, frame_format))
+        return result(count_frames_on_disk(out_dir, frame_format), skipped=True)
 
     logger.info("extracting frames from %s to %s", source, out_dir)
     run(_extract_cmd(source, out_dir, frame_format, bins), capture=False)

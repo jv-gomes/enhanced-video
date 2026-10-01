@@ -50,12 +50,38 @@ def test_output_equal_to_input_is_rejected(sample_video: Path):
     assert excinfo.value.code == 2
 
 
+def test_options_carry_every_processing_argument():
+    args = cli.build_parser().parse_args(
+        ["clip.mp4", "--scale", "3", "--fps", "48", "--tile", "128", "--keep-temp"]
+    )
+    options = cli.options_from_args(args)
+    assert (options.scale, options.target_fps, options.tile) == (3, 48, 128)
+    assert options.keep_temp is True
+
+
 @requires_ffmpeg
-def test_pipeline_not_implemented_yet_exits_non_zero(
-    sample_video: Path, capsys: pytest.CaptureFixture[str]
+def test_a_missing_binary_is_reported_and_the_frames_are_kept(
+    sample_video: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ):
-    assert cli.main([str(sample_video), "--scale", "2", "--fps", "60"]) == cli.EXIT_ERROR
-    assert "not implemented yet" in capsys.readouterr().err
+    """A failed stage must explain itself and leave the work behind to resume."""
+    monkeypatch.setenv("REALESRGAN_BIN", str(tmp_path / "not-installed"))
+    work_base = tmp_path / "work"
+    code = cli.main(
+        [
+            str(sample_video),
+            "-o", str(tmp_path / "out.mp4"),
+            "--work-dir", str(work_base),
+        ]
+    )
+    assert code == cli.EXIT_ERROR
+    err = capsys.readouterr().err
+    assert "was not found" in err
+    assert "resumes" in err
+    extracted = list(work_base.glob("*/frames_in/*.png"))
+    assert extracted, "the extracted frames should survive a later stage failing"
 
 
 def test_doctor_runs_without_an_input(capsys: pytest.CaptureFixture[str]):

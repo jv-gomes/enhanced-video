@@ -13,12 +13,14 @@ from pathlib import Path
 
 from . import __version__, config
 from .doctor import report as doctor_report
-from .encode import describe_chain, encoder_chain
-from .pipeline import WorkDir, estimate_disk_usage
+from .encode import EncodeError, describe_chain, encoder_chain
+from .extract import ExtractError
+from .interpolate import InterpolateError
+from .pipeline import Options, WorkDir, estimate_disk_usage, run_pipeline
 from .pipeline import human_bytes as pipeline_human
 from .probe import ProbeError, probe
 from .process import ToolError
-from .upscale import ModelError, resolve_model
+from .upscale import ModelError, UpscaleError, resolve_model
 
 logger = logging.getLogger("videoenhance")
 
@@ -26,6 +28,9 @@ ORDERS = ("upscale-first", "interpolate-first")
 
 EXIT_OK = 0
 EXIT_ERROR = 1
+#: Conventional exit code for SIGINT, so a resumable interruption is
+#: distinguishable from a real failure in a shell loop.
+EXIT_INTERRUPTED = 130
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -132,6 +137,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     return parser
+
+
+def options_from_args(args: argparse.Namespace) -> Options:
+    """Translate the parsed arguments into the pipeline's own options."""
+    return Options(
+        scale=args.scale,
+        target_fps=args.fps,
+        model=args.model,
+        frame_format=args.frame_format,
+        gpu=args.gpu,
+        tile=args.tile,
+        keep_temp=args.keep_temp,
+    )
 
 
 def describe_plan(
@@ -255,12 +273,33 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run:
         return EXIT_OK
 
-    print(
-        "\nThe processing pipeline is not implemented yet; "
-        "see roadmap.md, milestones M3-M5.",
-        file=sys.stderr,
-    )
-    return EXIT_ERROR
+    print()
+    try:
+        result = run_pipeline(
+            args.input,
+            output,
+            options_from_args(args),
+            info=info,
+            work=work,
+        )
+    except KeyboardInterrupt:
+        print(
+            f"\ninterrupted; the frames in {work.root} are kept, "
+            "so running the same command again resumes from here.",
+            file=sys.stderr,
+        )
+        return EXIT_INTERRUPTED
+    except (ExtractError, UpscaleError, InterpolateError, EncodeError, ToolError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        print(
+            f"the frames in {work.root} are kept, so fixing the cause and "
+            "running the same command again resumes from there.",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
+
+    print(result.render())
+    return EXIT_OK
 
 
 if __name__ == "__main__":

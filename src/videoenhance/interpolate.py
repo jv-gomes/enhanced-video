@@ -15,9 +15,9 @@ from pathlib import Path
 
 from . import config
 from .config import Binaries, binaries
-from .pipeline import count_frames_on_disk, frame_pattern, stage_is_done
 from .process import ToolError, run
 from .upscale import looks_like_vram_exhaustion
+from .workdir import count_frames_on_disk, frame_pattern, stage_is_done
 
 logger = logging.getLogger(__name__)
 

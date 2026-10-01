@@ -18,8 +18,8 @@ from fractions import Fraction
 from pathlib import Path
 
 from .config import DEFAULT_FRAME_FORMAT, Binaries, binaries
-from .pipeline import frame_pattern
 from .process import ToolError, run
+from .workdir import frame_pattern
 
 logger = logging.getLogger(__name__)
 

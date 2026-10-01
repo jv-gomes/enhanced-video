@@ -1,221 +1,229 @@
-"""The work directory and the rules that make every stage resumable.
+"""Driving the stages, in order, resumably.
 
-A long video takes hours, so a crash must not throw the work away. Each stage
-writes its frames into its own directory under ``work/``, and a stage whose
-directory already holds every frame it would produce is skipped on the next
-run. The layout is keyed by the input file, so processing two videos in
-sequence never mixes their frames.
+The pipeline owns the sequence and the decisions around it: which stages are
+worth running at all, what each one should produce, and when the scratch space
+can be thrown away. The stages themselves live in their own modules, and the
+directories they share come from :mod:`videoenhance.workdir`.
 """
 
 from __future__ import annotations
 
-import hashlib
 import logging
-import shutil
 from dataclasses import dataclass
+from fractions import Fraction
 from pathlib import Path
 
 from . import config
+from .config import Binaries
+from .encode import encode
+from .extract import extract
+from .interpolate import interpolate, is_needed, target_frame_count
+from .probe import VideoInfo, probe
+from .upscale import upscale
+from .workdir import (
+    FRAMES_IN,
+    FRAMES_OUT,
+    FRAMES_UP,
+    SpaceEstimate,
+    WorkDir,
+    count_frames_on_disk,
+    estimate_disk_usage,
+    estimate_frame_bytes,
+    frame_glob,
+    frame_pattern,
+    frames_complete,
+    human_bytes,
+    stage_is_done,
+)
 
 logger = logging.getLogger(__name__)
 
-#: Stage directory names inside a work directory.
-FRAMES_IN = "frames_in"
-FRAMES_UP = "frames_up"
-FRAMES_OUT = "frames_out"
-#: CFR-normalised copy of a VFR input; also the audio source in that case.
-CFR_NAME = "cfr.mkv"
-
-
-def frame_glob(frame_format: str = config.DEFAULT_FRAME_FORMAT) -> str:
-    """Glob matching the frames a stage writes, e.g. ``*.png``."""
-    return f"*.{frame_format}"
-
-
-def frame_pattern(frame_format: str = config.DEFAULT_FRAME_FORMAT) -> str:
-    """FFmpeg/NCNN filename pattern, e.g. ``%08d.png``."""
-    return f"{config.FRAME_PATTERN}.{frame_format}"
-
-
-def count_frames_on_disk(
-    directory: Path, frame_format: str = config.DEFAULT_FRAME_FORMAT
-) -> int:
-    """How many frames ``directory`` currently holds."""
-    if not directory.is_dir():
-        return 0
-    return sum(1 for _ in directory.glob(frame_glob(frame_format)))
-
-
-def frames_complete(
-    directory: Path,
-    expected: int,
-    frame_format: str = config.DEFAULT_FRAME_FORMAT,
-) -> bool:
-    """Whether ``directory`` already holds every expected frame.
-
-    An ``expected`` count of zero means "unknown", which can never count as
-    complete: guessing wrong here would silently skip real work.
-    """
-    if expected <= 0:
-        return False
-    return count_frames_on_disk(directory, frame_format) >= expected
-
-
-def stage_is_done(
-    name: str,
-    directory: Path,
-    expected: int,
-    frame_format: str = config.DEFAULT_FRAME_FORMAT,
-) -> bool:
-    """Like :func:`frames_complete`, but says out loud that it is skipping."""
-    if frames_complete(directory, expected, frame_format):
-        logger.info("skipping %s: %s already holds %d frames", name, directory, expected)
-        return True
-    return False
+# Re-exported so callers can treat the pipeline as the single entry point.
+__all__ = [
+    "FRAMES_IN",
+    "FRAMES_OUT",
+    "FRAMES_UP",
+    "Options",
+    "Result",
+    "SpaceEstimate",
+    "Stage",
+    "WorkDir",
+    "count_frames_on_disk",
+    "estimate_disk_usage",
+    "estimate_frame_bytes",
+    "frame_glob",
+    "frame_pattern",
+    "frames_complete",
+    "human_bytes",
+    "run_pipeline",
+    "stage_is_done",
+]
 
 
 @dataclass(frozen=True)
-class WorkDir:
-    """Scratch space for one input file.
+class Options:
+    """Everything the pipeline needs to know about how to process a file."""
 
-    Attributes:
-        root: The per-input directory, e.g. ``work/clip-1a2b3c4d/``.
-    """
-
-    root: Path
-
-    @classmethod
-    def for_input(cls, input_path: Path, base: Path | None = None) -> WorkDir:
-        """Derive the work directory for ``input_path``.
-
-        The name carries the file stem for readability plus a short digest of
-        the resolved path, so two different files with the same name do not
-        share a directory and the same file always maps back to its own
-        frames, which is what makes resuming work across runs.
-        """
-        base = base or config.WORK_DIR
-        digest = hashlib.sha256(str(input_path.resolve()).encode()).hexdigest()[:8]
-        stem = "".join(c if c.isalnum() or c in "-_" else "-" for c in input_path.stem)[:40]
-        return cls(root=base / f"{stem or 'video'}-{digest}")
-
-    @property
-    def frames_in(self) -> Path:
-        """Frames extracted from the source."""
-        return self.root / FRAMES_IN
-
-    @property
-    def frames_up(self) -> Path:
-        """Frames after Real-ESRGAN."""
-        return self.root / FRAMES_UP
-
-    @property
-    def frames_out(self) -> Path:
-        """Frames after RIFE, i.e. what gets encoded."""
-        return self.root / FRAMES_OUT
-
-    @property
-    def cfr_video(self) -> Path:
-        """CFR-normalised copy of a VFR source."""
-        return self.root / CFR_NAME
-
-    @property
-    def stage_dirs(self) -> tuple[Path, Path, Path]:
-        return (self.frames_in, self.frames_up, self.frames_out)
-
-    def create(self) -> WorkDir:
-        """Create the directory tree, reusing whatever is already there."""
-        for directory in (self.root, *self.stage_dirs):
-            directory.mkdir(parents=True, exist_ok=True)
-        logger.debug("work directory ready: %s", self.root)
-        return self
-
-    def cleanup(self, keep: bool = False) -> None:
-        """Remove the work directory, unless ``keep`` is set."""
-        if keep:
-            logger.info("keeping work directory %s", self.root)
-            return
-        if self.root.exists():
-            shutil.rmtree(self.root, ignore_errors=True)
-            logger.debug("removed work directory %s", self.root)
-
-    def free_bytes(self) -> int:
-        """Free space on the filesystem that will hold the frames."""
-        probe_dir = self.root
-        while not probe_dir.exists() and probe_dir != probe_dir.parent:
-            probe_dir = probe_dir.parent
-        return shutil.disk_usage(probe_dir).free
-
-
-#: Rough compressed size of one frame, in bytes per pixel. PNG of real video
-#: content lands around 1.5 B/px for 8-bit RGB; JPEG at quality 2 is far
-#: smaller. Deliberately generous: a warning that comes too early is cheap,
-#: running out of disk three hours into a job is not.
-BYTES_PER_PIXEL = {"png": 1.5, "jpg": 0.3}
-
-
-def estimate_frame_bytes(
-    width: int, height: int, frame_format: str = config.DEFAULT_FRAME_FORMAT
-) -> int:
-    """Estimated size of a single frame file."""
-    return int(width * height * BYTES_PER_PIXEL.get(frame_format, 1.5))
+    scale: int = config.DEFAULT_SCALE
+    target_fps: float = config.DEFAULT_TARGET_FPS
+    model: str = config.DEFAULT_UPSCALE_MODEL
+    rife_model: str = config.DEFAULT_RIFE_MODEL
+    frame_format: str = config.DEFAULT_FRAME_FORMAT
+    gpu: int = config.DEFAULT_GPU_ID
+    tile: int = config.DEFAULT_TILE_SIZE
+    threads: str = config.DEFAULT_THREADS
+    keep_temp: bool = False
+    allow_hardware: bool = True
+    prefer_encoder: str | None = None
 
 
 @dataclass(frozen=True)
-class SpaceEstimate:
-    """What the intermediate frames are expected to cost on disk."""
+class Stage:
+    """One completed stage, for the run summary."""
 
-    stages: dict[str, int]
-    free: int
-
-    @property
-    def total(self) -> int:
-        return sum(self.stages.values())
-
-    @property
-    def fits(self) -> bool:
-        return self.free >= self.total
+    name: str
+    frames: int
+    detail: str = ""
+    skipped: bool = False
 
     def render(self) -> str:
-        parts = ", ".join(f"{name} {human_bytes(size)}" for name, size in self.stages.items())
-        return f"{human_bytes(self.total)} of frames ({parts}); {human_bytes(self.free)} free"
+        suffix = " (already done)" if self.skipped else ""
+        detail = f", {self.detail}" if self.detail else ""
+        return f"{self.name}: {self.frames} frames{detail}{suffix}"
 
 
-def human_bytes(size: float) -> str:
-    """Format a byte count the way a person reads it."""
-    for unit in ("B", "KB", "MB", "GB", "TB"):
-        if abs(size) < 1024 or unit == "TB":
-            return f"{size:.0f} {unit}" if unit in ("B", "KB") else f"{size:.1f} {unit}"
-        size /= 1024
-    return f"{size:.1f} TB"
+@dataclass(frozen=True)
+class Result:
+    """What a pipeline run produced."""
+
+    output: Path
+    encoder: str
+    fps: Fraction
+    frames: int
+    stages: list[Stage]
+
+    def render(self) -> str:
+        lines = [stage.render() for stage in self.stages]
+        lines.append(f"encoded {self.frames} frames at {float(self.fps):g} fps with {self.encoder}")
+        lines.append(f"wrote {self.output}")
+        return "\n".join(lines)
 
 
-def estimate_disk_usage(
-    width: int,
-    height: int,
-    frame_count: int,
+def run_pipeline(
+    input_path: Path,
+    output: Path,
+    options: Options | None = None,
     *,
-    scale: int,
-    target_fps: float,
-    source_fps: float,
-    frame_format: str = config.DEFAULT_FRAME_FORMAT,
-    free: int = 0,
-) -> SpaceEstimate:
-    """Estimate the peak disk cost of the intermediate frame directories.
+    info: VideoInfo | None = None,
+    work: WorkDir | None = None,
+    bins: Binaries | None = None,
+) -> Result:
+    """Run every stage and return what was produced.
 
-    All three stage directories are counted, because a resumable pipeline
-    cannot delete the input frames of a stage it may have to run again.
+    The stages write into fixed directories named after the tool that fills
+    them, so a crashed run resumes from wherever it stopped, and the work
+    directory is removed only after the output file exists.
+
+    Raises:
+        FileNotFoundError: the input does not exist.
+        ValueError: the output would overwrite the input.
     """
-    per_source = estimate_frame_bytes(width, height, frame_format)
-    per_upscaled = estimate_frame_bytes(width * scale, height * scale, frame_format)
-    interpolated = frame_count
-    if source_fps > 0 and target_fps > source_fps:
-        interpolated = int(frame_count * (target_fps / source_fps))
+    options = options or Options()
+    info = info or probe(input_path)
+    output = Path(output)
+    if output.resolve() == Path(info.path).resolve():
+        raise ValueError(f"refusing to overwrite the input video: {output}")
 
-    return SpaceEstimate(
-        stages={
-            FRAMES_IN: per_source * frame_count,
-            FRAMES_UP: per_upscaled * frame_count,
-            FRAMES_OUT: per_upscaled * interpolated,
-        },
-        free=free,
+    work = (work or WorkDir.for_input(info.path)).create()
+    stages: list[Stage] = []
+
+    extracted = extract(info, work, frame_format=options.frame_format, bins=bins)
+    stages.append(
+        Stage(
+            "extract",
+            extracted.frame_count,
+            "normalised to CFR" if extracted.normalised else "",
+            extracted.skipped,
+        )
+    )
+
+    frames = extracted.frames_dir
+    frame_count = extracted.frame_count
+    fps: Fraction = extracted.fps
+
+    if options.scale > 1:
+        upscaled = upscale(
+            frames,
+            work.frames_up,
+            expected_frames=frame_count,
+            scale=options.scale,
+            model=options.model,
+            frame_format=options.frame_format,
+            gpu=options.gpu,
+            tile=options.tile,
+            threads=options.threads,
+            bins=bins,
+        )
+        stages.append(
+            Stage(
+                "upscale",
+                upscaled.frame_count,
+                f"{options.scale}x with {options.model}",
+                upscaled.skipped,
+            )
+        )
+        frames = upscaled.frames_dir
+        frame_count = upscaled.frame_count
+    else:
+        logger.info("skipping upscale: scale is 1")
+
+    if is_needed(fps, options.target_fps):
+        target = target_frame_count(frame_count, fps, options.target_fps)
+        interpolated = interpolate(
+            frames,
+            work.frames_out,
+            target_frames=target,
+            model=options.rife_model,
+            frame_format=options.frame_format,
+            gpu=options.gpu,
+            threads=options.threads,
+            width=info.width * options.scale,
+            height=info.height * options.scale,
+            bins=bins,
+        )
+        stages.append(
+            Stage(
+                "interpolate",
+                interpolated.frame_count,
+                f"to {float(options.target_fps):g} fps"
+                + (", UHD mode" if interpolated.uhd else ""),
+                interpolated.skipped,
+            )
+        )
+        frames = interpolated.frames_dir
+        frame_count = interpolated.frame_count
+        fps = Fraction(options.target_fps).limit_denominator(100000)
+    else:
+        logger.info("skipping interpolation: %s fps is not above %s", options.target_fps, fps)
+
+    encoder = encode(
+        frames,
+        output,
+        fps=fps,
+        audio_source=extracted.audio_source if extracted.has_audio else None,
+        frame_format=options.frame_format,
+        prefer=options.prefer_encoder,
+        allow_hardware=options.allow_hardware,
+        bins=bins,
+    )
+
+    # Only now that the output exists is the scratch space safe to remove.
+    work.cleanup(keep=options.keep_temp)
+
+    return Result(
+        output=output,
+        encoder=encoder.name,
+        fps=fps,
+        frames=frame_count,
+        stages=stages,
     )
