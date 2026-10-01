@@ -83,3 +83,68 @@ def vfr_video() -> Path:
             "-c:v", "libx264", "-c:a", "aac",
         ],
     )
+
+
+def write_stub(path: Path, body: str) -> Path:
+    """Write an executable stand-in for an NCNN binary.
+
+    The real executables need a GPU and a model download, so the wrappers are
+    exercised against scripts that accept the same arguments. That still tests
+    what the wrappers are responsible for: the argument list, the retry
+    behaviour and how the output directory is judged.
+    """
+    path.write_text("#!/usr/bin/env bash\n" + body)
+    path.chmod(0o755)
+    return path
+
+
+#: Records every argument list it is called with, one per line, then copies the
+#: input frames to the output directory unchanged.
+STUB_RECORDING = """
+set -euo pipefail
+echo "$@" >> "$ARGV_LOG"
+IN=""; OUT=""; FMT="png"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -i) IN="$2"; shift 2;;
+    -o) OUT="$2"; shift 2;;
+    -f) FMT="$2"; shift 2;;
+    *) shift;;
+  esac
+done
+mkdir -p "$OUT"
+for f in "$IN"/*."$FMT"; do
+  [[ -e "$f" ]] || continue
+  cp "$f" "$OUT/$(basename "$f")"
+done
+"""
+
+
+@pytest.fixture
+def stub_bin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Factory for stub NCNN binaries, with a log of how they were called."""
+    argv_log = tmp_path / "argv.log"
+    argv_log.touch()
+    monkeypatch.setenv("ARGV_LOG", str(argv_log))
+
+    def make(env_var: str, body: str = STUB_RECORDING, name: str = "stub-ncnn") -> Path:
+        path = write_stub(tmp_path / name, body)
+        monkeypatch.setenv(env_var, str(path))
+        return path
+
+    make.log = argv_log  # type: ignore[attr-defined]
+    return make
+
+
+@pytest.fixture
+def frames(tmp_path: Path):
+    """Factory for a directory of placeholder frame files."""
+
+    def make(count: int, name: str = "frames_in", ext: str = "png") -> Path:
+        directory = tmp_path / name
+        directory.mkdir(parents=True, exist_ok=True)
+        for index in range(1, count + 1):
+            (directory / f"{index:08d}.{ext}").write_bytes(b"frame")
+        return directory
+
+    return make

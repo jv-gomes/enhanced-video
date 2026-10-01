@@ -103,7 +103,7 @@ and disk usage problems surface, so it comes before the GPU steps.
       `--tile`, `--gpu`, with scale values validated per model.
 - [x] `feat(upscale): retry with smaller tile on VRAM error` — detect Vulkan
       allocation failures and retry at 256 then 128 before giving up.
-- [ ] `test(upscale): add wrapper tests with a stub binary` — assert the
+- [x] `test(upscale): add wrapper tests with a stub binary` — assert the
       generated argument list without touching the GPU.
 
 ## M4 — Interpolate (RIFE NCNN)
