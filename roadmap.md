@@ -87,9 +87,10 @@ and disk usage problems surface, so it comes before the GPU steps.
 - [x] `feat(encode): assemble frames with original audio` — mux the frame
       sequence with the original audio stream (`-map 1:a? -c:a copy
       -shortest`), never overwriting the input file.
-- [ ] `feat(cli): warn on insufficient disk space` — estimate the frame
+- [x] `feat(cli): warn on insufficient disk space` — estimate the frame
       footprint from resolution, frame count and scale; warn before starting
-      and mention `--frame-format jpg`.
+      and mention `--frame-format jpg`. Adds `--dry-run`, which prints the
+      planned run, its encoder chain and its disk cost, then exits.
 - [ ] `test(e2e): add extract-encode round-trip test` — extract and re-encode
       the fixture, then assert duration and audio presence survive.
 

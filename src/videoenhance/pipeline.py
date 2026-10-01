@@ -144,3 +144,78 @@ class WorkDir:
         while not probe_dir.exists() and probe_dir != probe_dir.parent:
             probe_dir = probe_dir.parent
         return shutil.disk_usage(probe_dir).free
+
+
+#: Rough compressed size of one frame, in bytes per pixel. PNG of real video
+#: content lands around 1.5 B/px for 8-bit RGB; JPEG at quality 2 is far
+#: smaller. Deliberately generous: a warning that comes too early is cheap,
+#: running out of disk three hours into a job is not.
+BYTES_PER_PIXEL = {"png": 1.5, "jpg": 0.3}
+
+
+def estimate_frame_bytes(
+    width: int, height: int, frame_format: str = config.DEFAULT_FRAME_FORMAT
+) -> int:
+    """Estimated size of a single frame file."""
+    return int(width * height * BYTES_PER_PIXEL.get(frame_format, 1.5))
+
+
+@dataclass(frozen=True)
+class SpaceEstimate:
+    """What the intermediate frames are expected to cost on disk."""
+
+    stages: dict[str, int]
+    free: int
+
+    @property
+    def total(self) -> int:
+        return sum(self.stages.values())
+
+    @property
+    def fits(self) -> bool:
+        return self.free >= self.total
+
+    def render(self) -> str:
+        parts = ", ".join(f"{name} {human_bytes(size)}" for name, size in self.stages.items())
+        return f"{human_bytes(self.total)} of frames ({parts}); {human_bytes(self.free)} free"
+
+
+def human_bytes(size: float) -> str:
+    """Format a byte count the way a person reads it."""
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if abs(size) < 1024 or unit == "TB":
+            return f"{size:.0f} {unit}" if unit in ("B", "KB") else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} TB"
+
+
+def estimate_disk_usage(
+    width: int,
+    height: int,
+    frame_count: int,
+    *,
+    scale: int,
+    target_fps: float,
+    source_fps: float,
+    frame_format: str = config.DEFAULT_FRAME_FORMAT,
+    free: int = 0,
+) -> SpaceEstimate:
+    """Estimate the peak disk cost of the intermediate frame directories.
+
+    All three stage directories are counted, because a resumable pipeline
+    cannot delete the input frames of a stage it may have to run again.
+    """
+    per_source = estimate_frame_bytes(width, height, frame_format)
+    per_upscaled = estimate_frame_bytes(width * scale, height * scale, frame_format)
+    interpolated = frame_count
+    if source_fps > 0 and target_fps > source_fps:
+        interpolated = int(frame_count * (target_fps / source_fps))
+
+    return SpaceEstimate(
+        stages={
+            FRAMES_IN: per_source * frame_count,
+            FRAMES_UP: per_upscaled * frame_count,
+            FRAMES_OUT: per_upscaled * interpolated,
+        },
+        free=free,
+    )

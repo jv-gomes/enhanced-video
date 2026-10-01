@@ -13,6 +13,9 @@ from pathlib import Path
 
 from . import __version__, config
 from .doctor import report as doctor_report
+from .encode import describe_chain, encoder_chain
+from .pipeline import WorkDir, estimate_disk_usage
+from .pipeline import human_bytes as pipeline_human
 from .probe import ProbeError, probe
 from .process import ToolError
 
@@ -110,6 +113,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="print what ffprobe reports about the input and exit",
     )
     parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the planned run, its encoder and its disk cost, then exit",
+    )
+    parser.add_argument(
         "--doctor",
         action="store_true",
         help="check the environment (FFmpeg, encoders, Vulkan GPU, NCNN binaries) and exit",
@@ -123,6 +131,49 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     return parser
+
+
+def describe_plan(
+    info,
+    args: argparse.Namespace,
+    output: Path,
+    work: WorkDir,
+    estimate,
+) -> str:
+    """The run the given arguments would perform, as a readable block."""
+    chain = encoder_chain(prefer=None, allow_hardware=True)
+    return "\n".join(
+        [
+            f"input:   {info.width}x{info.height} @ {info.fps:g} fps, "
+            f"{info.nb_frames} frames" + (" (VFR)" if info.is_vfr else ""),
+            f"output:  {info.width * args.scale}x{info.height * args.scale} @ {args.fps:g} fps"
+            f" -> {output}",
+            f"model:   {args.model} at scale {args.scale}, {args.frame_format} frames",
+            f"order:   {args.order}",
+            f"encoder: {describe_chain(chain)}",
+            f"work:    {work.root}",
+            f"disk:    {estimate.render()}",
+        ]
+    )
+
+
+def warn_about_space(estimate, frame_format: str) -> bool:
+    """Warn when the frames are unlikely to fit. Returns True if a warning was printed."""
+    if estimate.fits:
+        return False
+    print(
+        f"warning: the intermediate frames need about "
+        f"{pipeline_human(estimate.total)} but only "
+        f"{pipeline_human(estimate.free)} is free.",
+        file=sys.stderr,
+    )
+    if frame_format != "jpg":
+        print(
+            "         --frame-format jpg cuts that to roughly a fifth, at a small "
+            "quality cost.",
+            file=sys.stderr,
+        )
+    return True
 
 
 def configure_logging(verbosity: int) -> None:
@@ -183,15 +234,28 @@ def main(argv: list[str] | None = None) -> int:
 
     validate(args, parser)
     output = args.output or default_output(args.input)
+    work = WorkDir.for_input(args.input, base=args.work_dir)
+
+    estimate = estimate_disk_usage(
+        info.width,
+        info.height,
+        info.nb_frames,
+        scale=args.scale,
+        target_fps=args.fps,
+        source_fps=info.fps,
+        frame_format=args.frame_format,
+        free=work.free_bytes(),
+    )
+
+    print(describe_plan(info, args, output, work, estimate))
+    warn_about_space(estimate, args.frame_format)
+
+    if args.dry_run:
+        return EXIT_OK
 
     print(
-        "The processing pipeline is not implemented yet.\n"
-        f"Planned run: {info.width}x{info.height} @ {info.fps:g} fps "
-        f"-> {info.width * args.scale}x{info.height * args.scale} @ {args.fps:g} fps\n"
-        f"  model:  {args.model} (scale {args.scale})\n"
-        f"  order:  {args.order}\n"
-        f"  output: {output}\n"
-        "See roadmap.md, milestones M2-M5.",
+        "\nThe processing pipeline is not implemented yet; "
+        "see roadmap.md, milestones M3-M5.",
         file=sys.stderr,
     )
     return EXIT_ERROR
