@@ -118,16 +118,23 @@ and disk usage problems surface, so it comes before the GPU steps.
 
 ## M5 — Pipeline, resume & UX
 
-- [ ] `feat(pipeline): wire full extract-upscale-interpolate-encode` — the
-      default order, upscaling before the frame count is multiplied.
-- [ ] `feat(pipeline): support --order interpolate-first` — the alternative
+- [x] `feat(pipeline): wire full extract-upscale-interpolate-encode` — the
+      default order, upscaling before the frame count is multiplied. The work
+      directory, the resume rule and the disk estimate moved to `workdir.py`
+      so `pipeline.py` can import the stages without a cycle.
+- [x] `feat(pipeline): support --order interpolate-first` — the alternative
       order, interpolating at the original resolution.
-- [ ] `feat(cli): add tqdm progress reporting` — per-stage progress derived
-      from the frame counts on disk.
-- [ ] `feat(pipeline): clean work dir unless --keep-temp` — clean up only
+- [x] `feat(cli): add tqdm progress reporting` — per-stage progress derived
+      from the frame counts on disk, in `progress.py`; off outside a terminal
+      and with `--no-progress`.
+- [x] `feat(pipeline): clean work dir unless --keep-temp` — clean up only
       after a successful run.
-- [ ] `test(pipeline): add stage-skipping resume tests` — a pre-filled output
+- [x] `test(pipeline): add stage-skipping resume tests` — a pre-filled output
       directory must skip its stage.
+- [x] `fix(pipeline): never resume from another order's frames` — the GPU
+      stages require an exact frame count to skip, and clear their output
+      directory before re-running. Found while testing the two orders: running
+      one after the other doubled the length of the video with no error.
 
 ## M6 — Docs, packaging & polish
 
