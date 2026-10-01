@@ -48,15 +48,44 @@ def frames_complete(
     directory: Path,
     expected: int,
     frame_format: str = config.DEFAULT_FRAME_FORMAT,
+    *,
+    exact: bool = False,
 ) -> bool:
     """Whether ``directory`` already holds every expected frame.
 
     An ``expected`` count of zero means "unknown", which can never count as
     complete: guessing wrong here would silently skip real work.
+
+    Args:
+        exact: Require exactly ``expected`` frames rather than at least that
+            many. The GPU stages know their output count precisely, so for them
+            a directory holding *more* frames than expected is not finished
+            work but somebody else's — frames left by a different ``--order``
+            or a different target frame rate. Extraction is the tolerant case:
+            a container's frame count can be an estimate.
     """
     if expected <= 0:
         return False
-    return count_frames_on_disk(directory, frame_format) >= expected
+    found = count_frames_on_disk(directory, frame_format)
+    return found == expected if exact else found >= expected
+
+
+def clear_frames(directory: Path, frame_format: str = config.DEFAULT_FRAME_FORMAT) -> int:
+    """Delete the frames in ``directory`` and report how many went.
+
+    Called before a stage re-runs, so that frames from an interrupted or
+    differently configured earlier run cannot be miscounted as part of its
+    output. The binaries process whole directories, so nothing is lost.
+    """
+    if not directory.is_dir():
+        return 0
+    removed = 0
+    for frame in directory.glob(frame_glob(frame_format)):
+        frame.unlink(missing_ok=True)
+        removed += 1
+    if removed:
+        logger.info("cleared %d stale frames from %s", removed, directory)
+    return removed
 
 
 def stage_is_done(
@@ -64,9 +93,11 @@ def stage_is_done(
     directory: Path,
     expected: int,
     frame_format: str = config.DEFAULT_FRAME_FORMAT,
+    *,
+    exact: bool = False,
 ) -> bool:
     """Like :func:`frames_complete`, but says out loud that it is skipping."""
-    if frames_complete(directory, expected, frame_format):
+    if frames_complete(directory, expected, frame_format, exact=exact):
         logger.info("skipping %s: %s already holds %d frames", name, directory, expected)
         return True
     return False

@@ -7,6 +7,7 @@ from pathlib import Path
 from videoenhance.workdir import (
     SpaceEstimate,
     WorkDir,
+    clear_frames,
     count_frames_on_disk,
     estimate_disk_usage,
     estimate_frame_bytes,
@@ -146,3 +147,23 @@ def test_the_order_changes_which_stage_pays_for_the_frames(tmp_path: Path):
     # Upscaling last is what makes every interpolated frame a full-size file.
     assert interpolate_first.stages["frames_up"] > upscale_first.stages["frames_up"]
     assert interpolate_first.stages["frames_out"] < upscale_first.stages["frames_out"]
+
+
+def test_an_exact_stage_rejects_a_directory_holding_too_many(tmp_path: Path):
+    """More frames than expected are somebody else's, not finished work."""
+    _fill(tmp_path / "frames_up", 12)
+    assert frames_complete(tmp_path / "frames_up", 10) is True
+    assert frames_complete(tmp_path / "frames_up", 10, exact=True) is False
+    assert frames_complete(tmp_path / "frames_up", 12, exact=True) is True
+
+
+def test_clearing_removes_only_the_frames(tmp_path: Path):
+    _fill(tmp_path, 3)
+    (tmp_path / "00000001.jpg").touch()
+    (tmp_path / "notes.txt").touch()
+    assert clear_frames(tmp_path) == 3
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["00000001.jpg", "notes.txt"]
+
+
+def test_clearing_a_missing_directory_is_harmless(tmp_path: Path):
+    assert clear_frames(tmp_path / "nowhere") == 0

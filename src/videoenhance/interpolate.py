@@ -17,7 +17,7 @@ from . import config
 from .config import Binaries, binaries
 from .process import ToolError, run
 from .upscale import looks_like_vram_exhaustion
-from .workdir import count_frames_on_disk, frame_pattern, stage_is_done
+from .workdir import clear_frames, count_frames_on_disk, frame_pattern, stage_is_done
 
 logger = logging.getLogger(__name__)
 
@@ -181,7 +181,9 @@ def interpolate(
     model_dir = config.rife_model_dir(model, bins)
     frames_out.mkdir(parents=True, exist_ok=True)
 
-    if not force and stage_is_done("interpolate", frames_out, target_frames, frame_format):
+    if not force and stage_is_done(
+        "interpolate", frames_out, target_frames, frame_format, exact=True
+    ):
         return InterpolateResult(
             frames_dir=frames_out,
             frame_count=count_frames_on_disk(frames_out, frame_format),
@@ -189,6 +191,10 @@ def interpolate(
             uhd=bool(uhd),
             skipped=True,
         )
+
+    # Whatever is in there now is from a run that did not finish, or did not
+    # finish this: counting it as output would corrupt the frame count.
+    clear_frames(frames_out, frame_format)
 
     logger.info(
         "interpolating %d frames to %d with %s (gpu %d, threads %s, uhd %s)",

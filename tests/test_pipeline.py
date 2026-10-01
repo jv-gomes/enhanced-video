@@ -242,3 +242,33 @@ def test_switching_order_reuses_the_extracted_frames(
     )
     stages = {stage.name: stage for stage in result.stages}
     assert stages["extract"].skipped is True
+
+
+@requires_ffmpeg
+def test_frames_from_the_other_order_are_not_mistaken_for_output(
+    sample_video: Path, tmp_path: Path, ncnn_stubs
+):
+    """frames_up means something different in each order, so it cannot be reused.
+
+    Interpolating first leaves frames_up holding one upscaled frame per
+    interpolated frame. Upscaling first expects one per source frame, and
+    counting the leftovers as its own would hand RIFE twice the frames it
+    should have and double the length of the video.
+    """
+    work = pipeline.WorkDir.for_input(sample_video, base=tmp_path / "work")
+    first = run_pipeline(
+        sample_video,
+        tmp_path / "first.mp4",
+        Options(scale=2, target_fps=60, order="interpolate-first", keep_temp=True),
+        work=work,
+    )
+    second = run_pipeline(
+        sample_video,
+        tmp_path / "second.mp4",
+        Options(scale=2, target_fps=60, order="upscale-first", keep_temp=True),
+        work=work,
+    )
+    assert second.frames == first.frames
+    stages = {stage.name: stage for stage in second.stages}
+    assert stages["upscale"].skipped is False
+    assert stages["upscale"].frames == 90

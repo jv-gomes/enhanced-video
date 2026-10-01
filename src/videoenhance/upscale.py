@@ -16,7 +16,7 @@ from pathlib import Path
 from . import config
 from .config import Binaries, binaries
 from .process import ToolError, run
-from .workdir import count_frames_on_disk, stage_is_done
+from .workdir import clear_frames, count_frames_on_disk, stage_is_done
 
 logger = logging.getLogger(__name__)
 
@@ -190,7 +190,7 @@ def upscale(
     expected = expected_frames or source_count
     frames_out.mkdir(parents=True, exist_ok=True)
 
-    if not force and stage_is_done("upscale", frames_out, expected, frame_format):
+    if not force and stage_is_done("upscale", frames_out, expected, frame_format, exact=True):
         return UpscaleResult(
             frames_dir=frames_out,
             frame_count=count_frames_on_disk(frames_out, frame_format),
@@ -199,6 +199,10 @@ def upscale(
             tile=tile,
             skipped=True,
         )
+
+    # Whatever is in there now is from a run that did not finish, or did not
+    # finish this: counting it as output would corrupt the frame count.
+    clear_frames(frames_out, frame_format)
 
     logger.info(
         "upscaling %d frames by %dx with %s (gpu %d, tile %s, threads %s)",
