@@ -26,8 +26,8 @@ GPU work (M3, M4) only lands after the cheap end-to-end plumbing (M2) is proven.
 - [x] `chore: add gitignore and project guidelines` — ignore `bin/`, `work/`,
       generated fixtures and the usual Python/editor noise; rename
       `Claude.md` to `CLAUDE.md`.
-- [ ] `docs: add implementation roadmap` — this file.
-- [ ] `docs: add README with setup and usage` — stub covering install,
+- [x] `docs: add implementation roadmap` — this file.
+- [x] `docs: add README with setup and usage` — stub covering install,
       binary download and the basic command; expanded in M6.
 
 ## M1 — Core scaffolding & probe
