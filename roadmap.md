@@ -56,7 +56,7 @@ machine is ready, before any GPU code exists.
       surface (`input`, `-o/--output`, `--scale`, `--fps`, `--order`,
       `--frame-format`, `--keep-temp`, `--gpu`, `-v`) plus `--probe-only`,
       which prints the probe result and exits.
-- [ ] `feat(cli): add doctor preflight check` — `doctor.py` and `--doctor`:
+- [x] `feat(cli): add doctor preflight check` — `doctor.py` and `--doctor`:
       check ffmpeg/ffprobe, list the usable encoders, report the Vulkan GPU
       and report whether the NCNN binaries are installed, with actionable
       messages and a non-zero exit when something is missing.

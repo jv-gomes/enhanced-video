@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 from . import __version__, config
+from .doctor import report as doctor_report
 from .probe import ProbeError, probe
 from .process import ToolError
 
@@ -159,7 +160,7 @@ def main(argv: list[str] | None = None) -> int:
     configure_logging(args.verbose)
 
     if args.doctor:
-        parser.error("--doctor is not wired up yet")
+        return doctor_report()
 
     if args.input is None:
         parser.error("an input video is required (or use --doctor)")
