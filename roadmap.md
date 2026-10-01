@@ -74,6 +74,9 @@ machine is ready, before any GPU code exists.
 Goal: a full round trip with no model in the loop. This is where audio sync
 and disk usage problems surface, so it comes before the GPU steps.
 
+- [x] `feat(pipeline): add work directory and resume helper` — the `work/`
+      layout plus `frames_complete(dir, expected)`, so any stage whose output
+      directory already holds every expected frame is skipped.
 - [ ] `feat(extract): add frame extraction with VFR handling` — extract with
       `-fps_mode passthrough`; when the probe reports VFR, convert to CFR
       first so the audio does not drift.
@@ -84,9 +87,6 @@ and disk usage problems surface, so it comes before the GPU steps.
 - [ ] `feat(encode): assemble frames with original audio` — mux the frame
       sequence with the original audio stream (`-map 1:a? -c:a copy
       -shortest`), never overwriting the input file.
-- [ ] `feat(pipeline): add work directory and resume helper` — the `work/`
-      layout plus `frames_complete(dir, expected)`, so any stage whose output
-      directory already holds every expected frame is skipped.
 - [ ] `feat(cli): warn on insufficient disk space` — estimate the frame
       footprint from resolution, frame count and scale; warn before starting
       and mention `--frame-format jpg`.
