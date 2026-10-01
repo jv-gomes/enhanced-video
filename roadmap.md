@@ -80,7 +80,7 @@ and disk usage problems surface, so it comes before the GPU steps.
 - [x] `feat(extract): add frame extraction with VFR handling` — extract with
       `-fps_mode passthrough`; when the probe reports VFR, convert to CFR
       first so the audio does not drift.
-- [ ] `feat(encode): add encoder detection with fallback chain` — parse
+- [x] `feat(encode): add encoder detection with fallback chain` — parse
       `ffmpeg -hide_banner -encoders` and pick VAAPI on Linux, AMF on
       Windows, `libx264` as the fallback; fall back automatically when a
       hardware encoder fails at runtime.

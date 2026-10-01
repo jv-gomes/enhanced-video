@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import config
+from .encode import CPU_ENCODERS, HW_ENCODERS, available_encoders
 from .process import ToolError, run, which
 
 OK = "ok"
@@ -23,14 +24,6 @@ WARN = "warn"
 FAIL = "fail"
 
 _MARKS = {OK: "[ ok ]", WARN: "[warn]", FAIL: "[fail]"}
-
-#: Hardware encoders worth reporting, best first, per platform.
-HW_ENCODERS = {
-    "linux": ("hevc_vaapi", "h264_vaapi"),
-    "win32": ("hevc_amf", "h264_amf"),
-    "darwin": ("hevc_videotoolbox", "h264_videotoolbox"),
-}
-CPU_ENCODERS = ("libx265", "libx264")
 
 REALESRGAN_URL = "https://github.com/xinntao/Real-ESRGAN-ncnn-vulkan/releases"
 RIFE_URL = "https://github.com/nihui/rife-ncnn-vulkan/releases"
@@ -68,16 +61,6 @@ def _check_ffmpeg_tool(name: str, path: Path) -> Check:
     except (ToolError, IndexError):
         return Check(name, FAIL, f"{located} is not runnable", "reinstall FFmpeg")
     return Check(name, OK, version.replace(f"{name} version ", "").split(" Copyright")[0])
-
-
-def available_encoders(ffmpeg: Path) -> set[str]:
-    """Encoder names reported by ``ffmpeg -encoders``."""
-    try:
-        out = run([ffmpeg, "-hide_banner", "-encoders"]).stdout
-    except ToolError:
-        return set()
-    # Lines look like: " V....D hevc_vaapi   H.265/HEVC (VAAPI)"
-    return set(re.findall(r"^\s*[A-Z.]{6}\s+(\S+)", out, re.MULTILINE))
 
 
 def _check_encoders(ffmpeg: Path) -> Check:
