@@ -19,6 +19,7 @@ from .encode import encode
 from .extract import extract
 from .interpolate import interpolate, is_needed, target_frame_count
 from .probe import VideoInfo, probe
+from .progress import track
 from .upscale import upscale
 from .workdir import (
     FRAMES_IN,
@@ -80,6 +81,8 @@ class Options:
     rife_model: str = config.DEFAULT_RIFE_MODEL
     frame_format: str = config.DEFAULT_FRAME_FORMAT
     order: str = config.DEFAULT_ORDER
+    #: Draw a progress bar per stage. The CLI turns this on for a terminal.
+    progress: bool = False
     gpu: int = config.DEFAULT_GPU_ID
     tile: int = config.DEFAULT_TILE_SIZE
     threads: str = config.DEFAULT_THREADS
@@ -149,18 +152,25 @@ def _upscale_stage(
         logger.info("skipping upscale: scale is 1")
         return frames
 
-    result = upscale(
-        frames.directory,
+    with track(
+        "upscale",
         work.frames_up,
-        expected_frames=frames.count,
-        scale=options.scale,
-        model=options.model,
+        frames.count,
         frame_format=options.frame_format,
-        gpu=options.gpu,
-        tile=options.tile,
-        threads=options.threads,
-        bins=bins,
-    )
+        enabled=options.progress,
+    ):
+        result = upscale(
+            frames.directory,
+            work.frames_up,
+            expected_frames=frames.count,
+            scale=options.scale,
+            model=options.model,
+            frame_format=options.frame_format,
+            gpu=options.gpu,
+            tile=options.tile,
+            threads=options.threads,
+            bins=bins,
+        )
     detail = f"{options.scale}x with {options.model}"
     if result.tile:
         detail += f", tile {result.tile}"
@@ -190,18 +200,26 @@ def _interpolate_stage(
         )
         return frames
 
-    result = interpolate(
-        frames.directory,
+    target = target_frame_count(frames.count, frames.fps, options.target_fps)
+    with track(
+        "interpolate",
         work.frames_out,
-        target_frames=target_frame_count(frames.count, frames.fps, options.target_fps),
-        model=options.rife_model,
+        target,
         frame_format=options.frame_format,
-        gpu=options.gpu,
-        threads=options.threads,
-        width=frames.width,
-        height=frames.height,
-        bins=bins,
-    )
+        enabled=options.progress,
+    ):
+        result = interpolate(
+            frames.directory,
+            work.frames_out,
+            target_frames=target,
+            model=options.rife_model,
+            frame_format=options.frame_format,
+            gpu=options.gpu,
+            threads=options.threads,
+            width=frames.width,
+            height=frames.height,
+            bins=bins,
+        )
     detail = f"to {float(options.target_fps):g} fps" + (", UHD mode" if result.uhd else "")
     stages.append(Stage("interpolate", result.frame_count, detail, result.skipped))
     return _Frames(
@@ -261,7 +279,14 @@ def run_pipeline(
     work = (work or WorkDir.for_input(info.path)).create()
     stages: list[Stage] = []
 
-    extracted = extract(info, work, frame_format=options.frame_format, bins=bins)
+    with track(
+        "extract",
+        work.frames_in,
+        info.nb_frames,
+        frame_format=options.frame_format,
+        enabled=options.progress,
+    ):
+        extracted = extract(info, work, frame_format=options.frame_format, bins=bins)
     stages.append(
         Stage(
             "extract",

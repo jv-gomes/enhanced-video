@@ -20,6 +20,7 @@ from .pipeline import ORDERS, Options, WorkDir, estimate_disk_usage, run_pipelin
 from .pipeline import human_bytes as pipeline_human
 from .probe import ProbeError, probe
 from .process import ToolError
+from .progress import wanted as progress_wanted
 from .upscale import ModelError, UpscaleError, resolve_model
 
 logger = logging.getLogger("videoenhance")
@@ -109,6 +110,12 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"directory for intermediate frames (default: {config.WORK_DIR})",
     )
     parser.add_argument(
+        "--no-progress",
+        dest="progress",
+        action="store_false",
+        help="do not draw per-stage progress bars (the default outside a terminal)",
+    )
+    parser.add_argument(
         "--keep-temp",
         action="store_true",
         help="keep the work directory after a successful run",
@@ -147,6 +154,7 @@ def options_from_args(args: argparse.Namespace) -> Options:
         model=args.model,
         frame_format=args.frame_format,
         order=args.order,
+        progress=args.progress and progress_wanted(),
         gpu=args.gpu,
         tile=args.tile,
         keep_temp=args.keep_temp,
