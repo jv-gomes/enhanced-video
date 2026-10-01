@@ -110,7 +110,7 @@ and disk usage problems surface, so it comes before the GPU steps.
 
 - [x] `feat(interpolate): add rife ncnn wrapper` — call `rife-ncnn-vulkan`
       with the model directory and `-f %08d.png`.
-- [ ] `feat(interpolate): compute target frame count` —
+- [x] `feat(interpolate): compute target frame count` —
       `input_frames * target_fps / original_fps`, as the `-n` argument.
 - [ ] `feat(interpolate): enable UHD mode above 4K` — pass `-u` when the
       output resolution warrants it.

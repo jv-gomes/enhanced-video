@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from fractions import Fraction
 from pathlib import Path
 
 from . import config
@@ -22,6 +23,44 @@ logger = logging.getLogger(__name__)
 
 class InterpolateError(RuntimeError):
     """Interpolation produced no frames, or fewer than it was asked for."""
+
+
+def target_frame_count(
+    source_frames: int, source_fps: Fraction | float, target_fps: Fraction | float
+) -> int:
+    """How many frames the output needs to hold ``source_frames`` at ``target_fps``.
+
+    ``source_frames * target_fps / source_fps``, rounded to the nearest whole
+    frame. Keeping the ratio exact matters: a count computed from a rounded
+    frame rate drifts against the audio, and 29.97 fps sources are the common
+    case, not the exception.
+    """
+    if source_frames <= 0:
+        raise InterpolateError("cannot compute a target from zero source frames")
+    source = Fraction(source_fps).limit_denominator(100000)
+    target = Fraction(target_fps).limit_denominator(100000)
+    if source <= 0 or target <= 0:
+        raise InterpolateError(f"frame rates must be positive, got {source_fps} -> {target_fps}")
+    if target < source:
+        # Dropping frames is not interpolation; the caller should skip the stage.
+        return source_frames
+    exact = Fraction(source_frames) * target / source
+    return max(source_frames, round(exact))
+
+
+def interpolation_factor(
+    source_fps: Fraction | float, target_fps: Fraction | float
+) -> Fraction:
+    """The ratio between the two frame rates, for logs and estimates."""
+    source = Fraction(source_fps).limit_denominator(100000)
+    if source <= 0:
+        raise InterpolateError(f"source frame rate must be positive, got {source_fps}")
+    return Fraction(target_fps).limit_denominator(100000) / source
+
+
+def is_needed(source_fps: Fraction | float, target_fps: Fraction | float) -> bool:
+    """Whether interpolating would change anything at all."""
+    return interpolation_factor(source_fps, target_fps) > 1
 
 
 @dataclass(frozen=True)
@@ -70,7 +109,9 @@ def interpolate(
     frames_in: Path,
     frames_out: Path,
     *,
-    target_frames: int,
+    target_frames: int | None = None,
+    source_fps: Fraction | float | None = None,
+    target_fps: Fraction | float | None = None,
     model: str = config.DEFAULT_RIFE_MODEL,
     frame_format: str = config.DEFAULT_FRAME_FORMAT,
     gpu: int = config.DEFAULT_GPU_ID,
@@ -79,6 +120,9 @@ def interpolate(
     force: bool = False,
 ) -> InterpolateResult:
     """Interpolate ``frames_in`` up to ``target_frames`` frames in ``frames_out``.
+
+    Give either ``target_frames`` directly, or ``source_fps`` and
+    ``target_fps`` to have it computed from the frames on disk.
 
     Raises:
         InterpolateError: there is nothing to interpolate, the target is not a
@@ -90,6 +134,16 @@ def interpolate(
     source_count = count_frames_on_disk(frames_in, frame_format)
     if source_count == 0:
         raise InterpolateError(f"no {frame_format} frames to interpolate in {frames_in}")
+
+    if target_frames is None:
+        if source_fps is None or target_fps is None:
+            raise InterpolateError(
+                "interpolate() needs either target_frames, or both source_fps and target_fps"
+            )
+        target_frames = target_frame_count(source_count, source_fps, target_fps)
+        logger.debug(
+            "target of %d frames for %s -> %s fps", target_frames, source_fps, target_fps
+        )
     if target_frames < source_count:
         raise InterpolateError(
             f"target of {target_frames} frames is below the {source_count} frames "
