@@ -127,14 +127,27 @@ class WorkDir:
         logger.debug("work directory ready: %s", self.root)
         return self
 
-    def cleanup(self, keep: bool = False) -> None:
-        """Remove the work directory, unless ``keep`` is set."""
+    def cleanup(self, keep: bool = False) -> bool:
+        """Remove the work directory, unless ``keep`` is set.
+
+        Returns whether the directory is gone afterwards. Failing to delete it
+        is never fatal — the output video is already written — but it is worth
+        saying, because the frames can be tens of gigabytes.
+        """
         if keep:
             logger.info("keeping work directory %s", self.root)
-            return
+            return False
+        if not self.root.exists():
+            return True
+        shutil.rmtree(self.root, ignore_errors=True)
         if self.root.exists():
-            shutil.rmtree(self.root, ignore_errors=True)
-            logger.debug("removed work directory %s", self.root)
+            logger.warning(
+                "could not fully remove %s; delete it by hand to reclaim the space",
+                self.root,
+            )
+            return False
+        logger.debug("removed work directory %s", self.root)
+        return True
 
     def free_bytes(self) -> int:
         """Free space on the filesystem that will hold the frames."""

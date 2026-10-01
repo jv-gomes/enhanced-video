@@ -115,11 +115,17 @@ class Result:
     fps: Fraction
     frames: int
     stages: list[Stage]
+    #: The scratch directory the run used.
+    work: Path
+    #: Whether its frames are still there, i.e. ``--keep-temp`` was given.
+    kept: bool = False
 
     def render(self) -> str:
         lines = [stage.render() for stage in self.stages]
         lines.append(f"encoded {self.frames} frames at {float(self.fps):g} fps with {self.encoder}")
         lines.append(f"wrote {self.output}")
+        if self.kept:
+            lines.append(f"kept the frames in {self.work}")
         return "\n".join(lines)
 
 
@@ -317,8 +323,11 @@ def run_pipeline(
         bins=bins,
     )
 
-    # Only now that the output exists is the scratch space safe to remove.
-    work.cleanup(keep=options.keep_temp)
+    # Only once the output really exists is the scratch space safe to remove:
+    # the frames are the only thing that makes the next run cheap, and hours of
+    # GPU time are not worth a tidy directory.
+    kept = options.keep_temp or not output.exists()
+    work.cleanup(keep=kept)
 
     return Result(
         output=output,
@@ -326,4 +335,6 @@ def run_pipeline(
         fps=frames.fps,
         frames=frames.count,
         stages=stages,
+        work=work.root,
+        kept=kept,
     )

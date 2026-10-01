@@ -13,6 +13,7 @@ import pytest
 
 from videoenhance import pipeline
 from videoenhance.pipeline import Options, run_pipeline
+from videoenhance.process import ToolError
 
 from .conftest import requires_ffmpeg
 
@@ -112,3 +113,46 @@ def test_refuses_to_overwrite_the_input(sample_video: Path, tmp_path: Path):
         run_pipeline(sample_video, sample_video, work=pipeline.WorkDir.for_input(
             sample_video, base=tmp_path / "work"
         ))
+
+
+@requires_ffmpeg
+def test_a_successful_run_cleans_the_work_directory(
+    sample_video: Path, tmp_path: Path, ncnn_stubs
+):
+    work = pipeline.WorkDir.for_input(sample_video, base=tmp_path / "work")
+    result = run_pipeline(
+        sample_video, tmp_path / "out.mp4", Options(scale=2, target_fps=60), work=work
+    )
+    assert not work.root.exists()
+    assert result.kept is False
+    assert "kept the frames" not in result.render()
+
+
+@requires_ffmpeg
+def test_keep_temp_leaves_the_frames_and_says_where(
+    sample_video: Path, tmp_path: Path, ncnn_stubs
+):
+    work = pipeline.WorkDir.for_input(sample_video, base=tmp_path / "work")
+    result = run_pipeline(
+        sample_video,
+        tmp_path / "out.mp4",
+        Options(scale=2, target_fps=60, keep_temp=True),
+        work=work,
+    )
+    assert list(work.frames_out.glob("*.png"))
+    assert result.kept is True
+    assert str(work.root) in result.render()
+
+
+@requires_ffmpeg
+def test_a_failed_stage_keeps_the_frames_for_the_next_run(
+    sample_video: Path, tmp_path: Path, stub_bin
+):
+    """Hours of GPU time are not worth a tidy directory."""
+    stub_bin("REALESRGAN_BIN", body="exit 1\n", name="failing-stub")
+    work = pipeline.WorkDir.for_input(sample_video, base=tmp_path / "work")
+    with pytest.raises(ToolError):
+        run_pipeline(
+            sample_video, tmp_path / "out.mp4", Options(scale=2, target_fps=60), work=work
+        )
+    assert list(work.frames_in.glob("*.png"))
