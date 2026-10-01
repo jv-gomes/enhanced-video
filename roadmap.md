@@ -114,7 +114,7 @@ and disk usage problems surface, so it comes before the GPU steps.
       `input_frames * target_fps / original_fps`, as the `-n` argument.
 - [x] `feat(interpolate): enable UHD mode above 4K` — pass `-u` when the
       output resolution warrants it.
-- [ ] `test(interpolate): add frame count and argument tests`.
+- [x] `test(interpolate): add frame count and argument tests`.
 
 ## M5 — Pipeline, resume & UX
 
