@@ -60,7 +60,7 @@ machine is ready, before any GPU code exists.
       check ffmpeg/ffprobe, list the usable encoders, report the Vulkan GPU
       and report whether the NCNN binaries are installed, with actionable
       messages and a non-zero exit when something is missing.
-- [ ] `test(probe): add fixture video and probe tests` — `tests/conftest.py`
+- [x] `test(probe): add fixture video and probe tests` — `tests/conftest.py`
       generating `tests/fixtures/sample.mp4` with the `lavfi` command from
       CLAUDE.md (skipping if ffmpeg is unavailable), plus tests for `probe()`
       and for `run()` raising `ToolError`.
