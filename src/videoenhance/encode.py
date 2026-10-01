@@ -14,9 +14,11 @@ import logging
 import re
 import sys
 from dataclasses import dataclass, field
+from fractions import Fraction
 from pathlib import Path
 
-from .config import binaries
+from .config import DEFAULT_FRAME_FORMAT, Binaries, binaries
+from .pipeline import frame_pattern
 from .process import ToolError, run
 
 logger = logging.getLogger(__name__)
@@ -151,3 +153,114 @@ def describe_chain(chain: list[Encoder]) -> str:
     if not chain:
         return "none"
     return " -> ".join(f"{e.name}{' (hw)' if e.is_hardware else ''}" for e in chain)
+
+
+class EncodeError(RuntimeError):
+    """No encoder in the chain managed to produce the output file."""
+
+
+def build_encode_cmd(
+    frames_dir: Path,
+    output: Path,
+    encoder: Encoder,
+    *,
+    fps: Fraction | float,
+    audio_source: Path | None = None,
+    frame_format: str = DEFAULT_FRAME_FORMAT,
+    bins: Binaries | None = None,
+) -> list[object]:
+    """Assemble the FFmpeg call that turns a frame directory into a video.
+
+    The frames are input 0 and the audio file, when there is one, is input 1,
+    so the stream mapping stays the same whether or not audio exists.
+    """
+    bins = bins or binaries()
+    cmd: list[object] = [bins.ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
+    cmd += encoder.init_args
+    cmd += ["-framerate", str(fps), "-i", frames_dir / frame_pattern(frame_format)]
+    if audio_source:
+        cmd += ["-i", audio_source]
+
+    cmd += ["-map", "0:v"]
+    if audio_source:
+        # The '?' keeps this optional: a source without audio is not an error.
+        cmd += ["-map", "1:a?", "-c:a", "copy", "-shortest"]
+
+    if encoder.filters:
+        cmd += ["-filter:v", ",".join(encoder.filters)]
+    cmd += ["-c:v", encoder.name, *encoder.quality_args]
+    # Declare the frame rate on the output too, so the container timebase
+    # matches the frames and the audio stays aligned.
+    cmd += ["-r", str(fps), output]
+    return cmd
+
+
+def encode(
+    frames_dir: Path,
+    output: Path,
+    *,
+    fps: Fraction | float,
+    audio_source: Path | None = None,
+    frame_format: str = DEFAULT_FRAME_FORMAT,
+    chain: list[Encoder] | None = None,
+    prefer: str | None = None,
+    allow_hardware: bool = True,
+    bins: Binaries | None = None,
+) -> Encoder:
+    """Encode ``frames_dir`` into ``output`` and return the encoder that won.
+
+    Walks the fallback chain until one encoder succeeds. Writes to a temporary
+    file and moves it into place, so a failed attempt never leaves a truncated
+    video behind and never touches an existing output until the new one is
+    complete.
+
+    Raises:
+        EncodeError: the frame directory is empty, or every encoder failed.
+        ValueError: the output would overwrite the audio source.
+    """
+    bins = bins or binaries()
+    if not any(frames_dir.glob(f"*.{frame_format}")):
+        raise EncodeError(f"no {frame_format} frames to encode in {frames_dir}")
+    if audio_source and output.resolve() == audio_source.resolve():
+        raise ValueError(f"refusing to overwrite the input video: {output}")
+
+    chain = chain if chain is not None else encoder_chain(
+        prefer=prefer, allow_hardware=allow_hardware
+    )
+    if not chain:
+        raise EncodeError(
+            "no usable video encoder; install an FFmpeg build that includes libx264"
+        )
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    partial = output.with_suffix(f".part{output.suffix}")
+    failures: list[str] = []
+
+    for encoder in chain:
+        logger.info("encoding %s with %s", output.name, encoder.name)
+        try:
+            run(
+                build_encode_cmd(
+                    frames_dir,
+                    partial,
+                    encoder,
+                    fps=fps,
+                    audio_source=audio_source,
+                    frame_format=frame_format,
+                    bins=bins,
+                ),
+                capture=False,
+            )
+        except ToolError as exc:
+            partial.unlink(missing_ok=True)
+            failures.append(f"{encoder.name}: exit {exc.returncode}")
+            logger.warning("%s failed, trying the next encoder", encoder.name)
+            continue
+
+        partial.replace(output)
+        logger.info("wrote %s with %s", output, encoder.name)
+        return encoder
+
+    raise EncodeError(
+        "every encoder failed:\n  " + "\n  ".join(failures)
+    )

@@ -84,7 +84,7 @@ and disk usage problems surface, so it comes before the GPU steps.
       `ffmpeg -hide_banner -encoders` and pick VAAPI on Linux, AMF on
       Windows, `libx264` as the fallback; fall back automatically when a
       hardware encoder fails at runtime.
-- [ ] `feat(encode): assemble frames with original audio` — mux the frame
+- [x] `feat(encode): assemble frames with original audio` — mux the frame
       sequence with the original audio stream (`-map 1:a? -c:a copy
       -shortest`), never overwriting the input file.
 - [ ] `feat(cli): warn on insufficient disk space` — estimate the frame
