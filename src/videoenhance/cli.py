@@ -132,6 +132,9 @@ def configure_logging(verbosity: int) -> None:
     elif verbosity >= 2:
         level = logging.DEBUG
     logging.basicConfig(level=level, format="%(levelname)s %(name)s: %(message)s")
+    # basicConfig is a no-op once a handler exists, so set the level directly
+    # as well; otherwise -v is silently ignored when logging was already set up.
+    logging.getLogger().setLevel(level)
 
 
 def default_output(input_path: Path) -> Path:

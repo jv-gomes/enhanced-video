@@ -64,6 +64,10 @@ machine is ready, before any GPU code exists.
       generating `tests/fixtures/sample.mp4` with the `lavfi` command from
       CLAUDE.md (skipping if ffmpeg is unavailable), plus tests for `probe()`
       and for `run()` raising `ToolError`.
+- [x] `test(cli): add config, doctor and cli tests` — cover the environment
+      overrides and platform suffix, the doctor report's exit code and
+      missing-binary hints, and the CLI's `--probe-only`, `--doctor` and
+      argument validation paths.
 
 ## M2 — Extract & encode
 
