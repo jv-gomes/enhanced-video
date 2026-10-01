@@ -52,7 +52,7 @@ machine is ready, before any GPU code exists.
       `probe(path) -> VideoInfo` (width, height, `r_frame_rate`,
       `avg_frame_rate`, fps, frame count, duration, `has_audio`, `is_vfr`).
       VFR is detected by comparing the two frame rates as fractions.
-- [ ] `feat(cli): add entry point with --probe-only` — `cli.py` argparse
+- [x] `feat(cli): add entry point with --probe-only` — `cli.py` argparse
       surface (`input`, `-o/--output`, `--scale`, `--fps`, `--order`,
       `--frame-format`, `--keep-temp`, `--gpu`, `-v`) plus `--probe-only`,
       which prints the probe result and exits.

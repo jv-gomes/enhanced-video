@@ -113,7 +113,8 @@ def run(
         raise MissingToolError(argv) from exc
     except subprocess.TimeoutExpired as exc:
         stderr = exc.stderr if isinstance(exc.stderr, str) else ""
-        raise ToolError(argv, returncode=-1, stderr=stderr or f"timed out after {timeout}s") from exc
+        detail = stderr or f"timed out after {timeout}s"
+        raise ToolError(argv, returncode=-1, stderr=detail) from exc
 
     if check and completed.returncode != 0:
         raise ToolError(argv, completed.returncode, completed.stderr or "")
