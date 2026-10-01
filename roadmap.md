@@ -77,7 +77,7 @@ and disk usage problems surface, so it comes before the GPU steps.
 - [x] `feat(pipeline): add work directory and resume helper` — the `work/`
       layout plus `frames_complete(dir, expected)`, so any stage whose output
       directory already holds every expected frame is skipped.
-- [ ] `feat(extract): add frame extraction with VFR handling` — extract with
+- [x] `feat(extract): add frame extraction with VFR handling` — extract with
       `-fps_mode passthrough`; when the probe reports VFR, convert to CFR
       first so the audio does not drift.
 - [ ] `feat(encode): add encoder detection with fallback chain` — parse
