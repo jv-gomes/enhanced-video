@@ -48,7 +48,7 @@ machine is ready, before any GPU code exists.
       resolution via `sys.platform`, environment overrides
       (`REALESRGAN_BIN`, `RIFE_BIN`, `FFMPEG_BIN`, `FFPROBE_BIN`) and the
       default model / tile / thread settings.
-- [ ] `feat(probe): add ffprobe metadata reader` — `probe.py` with
+- [x] `feat(probe): add ffprobe metadata reader` — `probe.py` with
       `probe(path) -> VideoInfo` (width, height, `r_frame_rate`,
       `avg_frame_rate`, fps, frame count, duration, `has_audio`, `is_vfr`).
       VFR is detected by comparing the two frame rates as fractions.
