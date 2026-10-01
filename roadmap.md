@@ -112,7 +112,7 @@ and disk usage problems surface, so it comes before the GPU steps.
       with the model directory and `-f %08d.png`.
 - [x] `feat(interpolate): compute target frame count` —
       `input_frames * target_fps / original_fps`, as the `-n` argument.
-- [ ] `feat(interpolate): enable UHD mode above 4K` — pass `-u` when the
+- [x] `feat(interpolate): enable UHD mode above 4K` — pass `-u` when the
       output resolution warrants it.
 - [ ] `test(interpolate): add frame count and argument tests`.
 

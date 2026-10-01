@@ -16,13 +16,24 @@ from pathlib import Path
 from . import config
 from .config import Binaries, binaries
 from .pipeline import count_frames_on_disk, frame_pattern, stage_is_done
-from .process import run
+from .process import ToolError, run
+from .upscale import looks_like_vram_exhaustion
 
 logger = logging.getLogger(__name__)
 
 
 class InterpolateError(RuntimeError):
     """Interpolation produced no frames, or fewer than it was asked for."""
+
+
+def needs_uhd(width: int, height: int) -> bool:
+    """Whether RIFE should run in UHD mode for this resolution.
+
+    UHD mode changes how RIFE handles large motion, which matters once the
+    frames are 4K or larger. It also costs memory, so it is not enabled below
+    that.
+    """
+    return width * height >= config.UHD_PIXEL_THRESHOLD
 
 
 def target_frame_count(
@@ -70,6 +81,8 @@ class InterpolateResult:
     frames_dir: Path
     frame_count: int
     model: str
+    #: Whether UHD mode was used for the run that succeeded.
+    uhd: bool = False
     skipped: bool = False
 
 
@@ -82,9 +95,10 @@ def _build_cmd(
     frame_format: str,
     gpu: int,
     threads: str,
+    uhd: bool,
     bins: Binaries,
 ) -> list[object]:
-    return [
+    cmd: list[object] = [
         bins.rife,
         "-i",
         frames_in,
@@ -103,6 +117,9 @@ def _build_cmd(
         "-j",
         threads,
     ]
+    if uhd:
+        cmd.append("-u")
+    return cmd
 
 
 def interpolate(
@@ -116,6 +133,9 @@ def interpolate(
     frame_format: str = config.DEFAULT_FRAME_FORMAT,
     gpu: int = config.DEFAULT_GPU_ID,
     threads: str = config.DEFAULT_THREADS,
+    uhd: bool | None = None,
+    width: int = 0,
+    height: int = 0,
     bins: Binaries | None = None,
     force: bool = False,
 ) -> InterpolateResult:
@@ -123,6 +143,11 @@ def interpolate(
 
     Give either ``target_frames`` directly, or ``source_fps`` and
     ``target_fps`` to have it computed from the frames on disk.
+
+    UHD mode is enabled automatically when ``width`` and ``height`` describe a
+    4K-or-larger frame, and can be forced either way with ``uhd``. Because UHD
+    mode is also the first thing to drop when the GPU runs out of memory, a
+    Vulkan allocation failure is retried once with it off.
 
     Raises:
         InterpolateError: there is nothing to interpolate, the target is not a
@@ -150,6 +175,9 @@ def interpolate(
             "going in; interpolation can only add frames"
         )
 
+    if uhd is None:
+        uhd = needs_uhd(width, height) if width and height else False
+
     model_dir = config.rife_model_dir(model, bins)
     frames_out.mkdir(parents=True, exist_ok=True)
 
@@ -158,30 +186,44 @@ def interpolate(
             frames_dir=frames_out,
             frame_count=count_frames_on_disk(frames_out, frame_format),
             model=model,
+            uhd=bool(uhd),
             skipped=True,
         )
 
     logger.info(
-        "interpolating %d frames to %d with %s (gpu %d, threads %s)",
+        "interpolating %d frames to %d with %s (gpu %d, threads %s, uhd %s)",
         source_count,
         target_frames,
         model,
         gpu,
         threads,
+        "on" if uhd else "off",
     )
-    run(
-        _build_cmd(
-            frames_in,
-            frames_out,
-            target_frames=target_frames,
-            model_dir=model_dir,
-            frame_format=frame_format,
-            gpu=gpu,
-            threads=threads,
-            bins=bins,
-        ),
-        capture=True,
-    )
+
+    def attempt(use_uhd: bool) -> None:
+        run(
+            _build_cmd(
+                frames_in,
+                frames_out,
+                target_frames=target_frames,
+                model_dir=model_dir,
+                frame_format=frame_format,
+                gpu=gpu,
+                threads=threads,
+                uhd=use_uhd,
+                bins=bins,
+            ),
+            capture=True,
+        )
+
+    try:
+        attempt(uhd)
+    except ToolError as exc:
+        if not (uhd and looks_like_vram_exhaustion(exc)):
+            raise
+        logger.warning("UHD mode ran out of memory, retrying without it")
+        attempt(False)
+        uhd = False
 
     produced = count_frames_on_disk(frames_out, frame_format)
     if produced < target_frames:
@@ -190,4 +232,6 @@ def interpolate(
             f"{frames_out}"
         )
     logger.info("interpolated to %d frames in %s", produced, frames_out)
-    return InterpolateResult(frames_dir=frames_out, frame_count=produced, model=model)
+    return InterpolateResult(
+        frames_dir=frames_out, frame_count=produced, model=model, uhd=uhd
+    )
