@@ -156,3 +156,89 @@ def test_a_failed_stage_keeps_the_frames_for_the_next_run(
             sample_video, tmp_path / "out.mp4", Options(scale=2, target_fps=60), work=work
         )
     assert list(work.frames_in.glob("*.png"))
+
+
+@requires_ffmpeg
+def test_a_second_run_skips_every_stage(sample_video: Path, tmp_path: Path, ncnn_stubs):
+    """Resuming a finished run must not touch the GPU again."""
+    work = pipeline.WorkDir.for_input(sample_video, base=tmp_path / "work")
+    options = Options(scale=2, target_fps=60, keep_temp=True)
+    run_pipeline(sample_video, tmp_path / "first.mp4", options, work=work)
+    calls_after_first = ncnn_stubs.log.read_text().splitlines()
+
+    again = run_pipeline(sample_video, tmp_path / "second.mp4", options, work=work)
+
+    assert [stage.skipped for stage in again.stages] == [True, True, True]
+    assert ncnn_stubs.log.read_text().splitlines() == calls_after_first
+    assert "already done" in again.render()
+    assert again.output.exists()
+
+
+@requires_ffmpeg
+def test_a_half_finished_stage_is_run_again(sample_video: Path, tmp_path: Path, ncnn_stubs):
+    """Only a complete directory counts; a crash mid-stage must be redone."""
+    work = pipeline.WorkDir.for_input(sample_video, base=tmp_path / "work")
+    options = Options(scale=2, target_fps=60, keep_temp=True)
+    run_pipeline(sample_video, tmp_path / "first.mp4", options, work=work)
+
+    upscaled = sorted(work.frames_up.glob("*.png"))
+    for frame in upscaled[len(upscaled) // 2 :]:
+        frame.unlink()
+    before = len(ncnn_stubs.log.read_text().splitlines())
+
+    again = run_pipeline(sample_video, tmp_path / "second.mp4", options, work=work)
+
+    stages = {stage.name: stage for stage in again.stages}
+    assert stages["extract"].skipped is True
+    assert stages["upscale"].skipped is False
+    assert stages["interpolate"].skipped is True
+    assert len(ncnn_stubs.log.read_text().splitlines()) == before + 1
+    assert len(list(work.frames_up.glob("*.png"))) == len(upscaled)
+
+
+@requires_ffmpeg
+def test_a_crashed_run_resumes_from_the_frames_it_left(
+    sample_video: Path, tmp_path: Path, stub_bin
+):
+    """The whole point of the work directory: the second attempt is cheaper."""
+    failing = stub_bin("REALESRGAN_BIN", body="exit 1\n", name="realesrgan-stub")
+    stub_bin("RIFE_BIN", name="rife-stub")
+    work = pipeline.WorkDir.for_input(sample_video, base=tmp_path / "work")
+    options = Options(scale=2, target_fps=60)
+
+    with pytest.raises(ToolError):
+        run_pipeline(sample_video, tmp_path / "out.mp4", options, work=work)
+    extracted = sorted(path.name for path in work.frames_in.glob("*.png"))
+    assert extracted
+
+    from .conftest import STUB_RECORDING, write_stub
+
+    write_stub(failing, STUB_RECORDING)
+    result = run_pipeline(sample_video, tmp_path / "out.mp4", options, work=work)
+
+    stages = {stage.name: stage for stage in result.stages}
+    assert stages["extract"].skipped is True
+    assert stages["upscale"].skipped is False
+    assert result.output.exists()
+
+
+@requires_ffmpeg
+def test_switching_order_reuses_the_extracted_frames(
+    sample_video: Path, tmp_path: Path, ncnn_stubs
+):
+    """The orders share frames_in, so changing one's mind is not a fresh start."""
+    work = pipeline.WorkDir.for_input(sample_video, base=tmp_path / "work")
+    run_pipeline(
+        sample_video,
+        tmp_path / "first.mp4",
+        Options(scale=2, target_fps=60, keep_temp=True),
+        work=work,
+    )
+    result = run_pipeline(
+        sample_video,
+        tmp_path / "second.mp4",
+        Options(scale=2, target_fps=60, order="interpolate-first", keep_temp=True),
+        work=work,
+    )
+    stages = {stage.name: stage for stage in result.stages}
+    assert stages["extract"].skipped is True
