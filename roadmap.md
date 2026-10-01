@@ -39,7 +39,7 @@ machine is ready, before any GPU code exists.
       `pyproject.toml` (setuptools, src layout, `requires-python = ">=3.10"`,
       `tqdm`), `requirements.txt`. Makes
       `python -m videoenhance.cli` work after `pip install -e .`.
-- [ ] `feat(process): add central subprocess run helper` — `process.py` with
+- [x] `feat(process): add central subprocess run helper` — `process.py` with
       `run(cmd: list[str])` and `ToolError`. Logs the command, captures stderr,
       raises with the stderr tail on a non-zero exit. Never `shell=True`.
       Every external call in the project goes through this.
