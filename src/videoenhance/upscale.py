@@ -25,6 +25,39 @@ class UpscaleError(RuntimeError):
     """Upscaling produced no frames, or fewer than it was given."""
 
 
+class ModelError(ValueError):
+    """The requested model cannot do the requested scale."""
+
+
+def resolve_model(model: str, scale: int) -> tuple[str, int]:
+    """Check a model/scale pair, and say what to do when it does not work.
+
+    Real-ESRGAN models are trained per factor: ``realesrgan-x4plus`` only
+    exists at 4x, while ``realesr-animevideov3`` covers 2x, 3x and 4x. Asking
+    for a combination that does not exist fails inside the binary with an
+    unhelpful error, so it is caught here.
+    """
+    supported = config.UPSCALE_MODELS.get(model)
+    if supported is None:
+        known = ", ".join(sorted(config.UPSCALE_MODELS))
+        raise ModelError(f"unknown model {model!r}; available models are {known}")
+    if scale not in supported:
+        factors = ", ".join(str(s) for s in supported)
+        alternatives = sorted(
+            name for name, scales in config.UPSCALE_MODELS.items() if scale in scales
+        )
+        hint = f"; {', '.join(alternatives)} can do {scale}x" if alternatives else ""
+        raise ModelError(f"{model} only supports scale {factors}, not {scale}{hint}")
+    return model, scale
+
+
+def models_for_scale(scale: int) -> list[str]:
+    """Every model that can upscale by ``scale``."""
+    return sorted(
+        name for name, scales in config.UPSCALE_MODELS.items() if scale in scales
+    )
+
+
 @dataclass(frozen=True)
 class UpscaleResult:
     """What the upscale stage produced."""
@@ -33,6 +66,8 @@ class UpscaleResult:
     frame_count: int
     scale: int
     model: str
+    #: Tile size that actually worked, which may be smaller than requested.
+    tile: int = config.DEFAULT_TILE_SIZE
     #: True when the frames were already on disk from an earlier run.
     skipped: bool = False
 
@@ -103,6 +138,12 @@ def upscale(
         ToolError: the binary failed.
     """
     bins = bins or binaries()
+    model, scale = resolve_model(model, scale)
+    if tile < 0:
+        raise ValueError("tile size must be 0 (automatic) or greater")
+    if frame_format not in config.FRAME_FORMATS:
+        raise ValueError(f"unsupported frame format {frame_format!r}")
+
     source_count = count_frames_on_disk(frames_in, frame_format)
     if source_count == 0:
         raise UpscaleError(f"no {frame_format} frames to upscale in {frames_in}")
@@ -116,11 +157,18 @@ def upscale(
             frame_count=count_frames_on_disk(frames_out, frame_format),
             scale=scale,
             model=model,
+            tile=tile,
             skipped=True,
         )
 
     logger.info(
-        "upscaling %d frames by %dx with %s", source_count, scale, model
+        "upscaling %d frames by %dx with %s (gpu %d, tile %s, threads %s)",
+        source_count,
+        scale,
+        model,
+        gpu,
+        tile or "auto",
+        threads,
     )
     run(
         _build_cmd(
@@ -145,5 +193,9 @@ def upscale(
         )
     logger.info("upscaled %d frames into %s", produced, frames_out)
     return UpscaleResult(
-        frames_dir=frames_out, frame_count=produced, scale=scale, model=model
+        frames_dir=frames_out,
+        frame_count=produced,
+        scale=scale,
+        model=model,
+        tile=tile,
     )

@@ -18,6 +18,7 @@ from .pipeline import WorkDir, estimate_disk_usage
 from .pipeline import human_bytes as pipeline_human
 from .probe import ProbeError, probe
 from .process import ToolError
+from .upscale import ModelError, resolve_model
 
 logger = logging.getLogger("videoenhance")
 
@@ -197,9 +198,10 @@ def validate(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
     """Reject argument combinations the pipeline cannot honour."""
     if args.scale < 1:
         parser.error("--scale must be 1 or greater")
-    if not config.scale_supported(args.model, args.scale):
-        supported = ", ".join(str(s) for s in config.UPSCALE_MODELS[args.model])
-        parser.error(f"{args.model} only supports scale {supported}, not {args.scale}")
+    try:
+        resolve_model(args.model, args.scale)
+    except ModelError as exc:
+        parser.error(str(exc))
     if args.fps <= 0:
         parser.error("--fps must be greater than 0")
     if args.tile < 0:
