@@ -108,7 +108,7 @@ and disk usage problems surface, so it comes before the GPU steps.
 
 ## M4 — Interpolate (RIFE NCNN)
 
-- [ ] `feat(interpolate): add rife ncnn wrapper` — call `rife-ncnn-vulkan`
+- [x] `feat(interpolate): add rife ncnn wrapper` — call `rife-ncnn-vulkan`
       with the model directory and `-f %08d.png`.
 - [ ] `feat(interpolate): compute target frame count` —
       `input_frames * target_fps / original_fps`, as the `-n` argument.
