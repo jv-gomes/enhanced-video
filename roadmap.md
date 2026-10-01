@@ -96,7 +96,7 @@ and disk usage problems surface, so it comes before the GPU steps.
 
 ## M3 — Upscale (Real-ESRGAN NCNN)
 
-- [ ] `feat(upscale): add realesrgan ncnn wrapper` — call
+- [x] `feat(upscale): add realesrgan ncnn wrapper` — call
       `realesrgan-ncnn-vulkan` on the input frame directory.
 - [ ] `feat(upscale): add model and tile-size options` — `--model`
       (`realesr-animevideov3`, `realesrgan-x4plus`, `realesrgan-x4plus-anime`),
