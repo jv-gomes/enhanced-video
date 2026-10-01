@@ -101,7 +101,7 @@ and disk usage problems surface, so it comes before the GPU steps.
 - [x] `feat(upscale): add model and tile-size options` — `--model`
       (`realesr-animevideov3`, `realesrgan-x4plus`, `realesrgan-x4plus-anime`),
       `--tile`, `--gpu`, with scale values validated per model.
-- [ ] `feat(upscale): retry with smaller tile on VRAM error` — detect Vulkan
+- [x] `feat(upscale): retry with smaller tile on VRAM error` — detect Vulkan
       allocation failures and retry at 256 then 128 before giving up.
 - [ ] `test(upscale): add wrapper tests with a stub binary` — assert the
       generated argument list without touching the GPU.
