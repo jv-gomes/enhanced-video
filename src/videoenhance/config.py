@@ -31,6 +31,17 @@ UPSCALE_MODELS: dict[str, tuple[int, ...]] = {
 DEFAULT_UPSCALE_MODEL = "realesr-animevideov3"
 DEFAULT_RIFE_MODEL = "rife-v4.6"
 
+#: Upscale before interpolating. The default, and the cheaper one: Real-ESRGAN
+#: is the expensive stage, so it should run before RIFE multiplies the frame
+#: count.
+ORDER_UPSCALE_FIRST = "upscale-first"
+#: Interpolate at the source resolution first. Slower overall, but RIFE sees
+#: the original pixels rather than Real-ESRGAN's reconstruction of them, which
+#: some people prefer on live-action footage.
+ORDER_INTERPOLATE_FIRST = "interpolate-first"
+ORDERS = (ORDER_UPSCALE_FIRST, ORDER_INTERPOLATE_FIRST)
+DEFAULT_ORDER = ORDER_UPSCALE_FIRST
+
 DEFAULT_SCALE = 2
 DEFAULT_TARGET_FPS = 60
 DEFAULT_FRAME_FORMAT = "png"

@@ -1,137 +1,114 @@
-"""Tests for the work directory, the resume rule and the disk estimate."""
+"""Tests for the stage sequence.
+
+The GPU binaries are replaced by stubs (see ``conftest.write_stub``), so these
+exercise what the pipeline is responsible for: which stages run, in which
+order, what each one is told to produce and what the summary then says.
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from videoenhance.pipeline import (
-    SpaceEstimate,
-    WorkDir,
-    count_frames_on_disk,
-    estimate_disk_usage,
-    estimate_frame_bytes,
-    frame_pattern,
-    frames_complete,
-    human_bytes,
-    stage_is_done,
-)
+import pytest
+
+from videoenhance import pipeline
+from videoenhance.pipeline import Options, run_pipeline
+
+from .conftest import requires_ffmpeg
 
 
-def _fill(directory: Path, count: int, ext: str = "png") -> None:
-    directory.mkdir(parents=True, exist_ok=True)
-    for index in range(1, count + 1):
-        (directory / f"{index:08d}.{ext}").touch()
+@pytest.fixture
+def ncnn_stubs(stub_bin):
+    """Stand-ins for both NCNN binaries, sharing one argument log."""
+    stub_bin("REALESRGAN_BIN", name="realesrgan-stub")
+    stub_bin("RIFE_BIN", name="rife-stub")
+    return stub_bin
 
 
-def test_work_dir_is_stable_per_input(tmp_path: Path):
-    first = WorkDir.for_input(Path("clip.mp4"), base=tmp_path)
-    again = WorkDir.for_input(Path("clip.mp4"), base=tmp_path)
-    assert first.root == again.root
+def stage_names(result) -> list[str]:
+    return [stage.name for stage in result.stages]
 
 
-def test_work_dir_differs_for_same_name_in_another_folder(tmp_path: Path):
-    a = WorkDir.for_input(tmp_path / "a" / "clip.mp4", base=tmp_path)
-    b = WorkDir.for_input(tmp_path / "b" / "clip.mp4", base=tmp_path)
-    assert a.root != b.root
-    assert a.root.name.startswith("clip-")
+def test_default_order_upscales_before_interpolating():
+    assert pipeline.stage_order() == ("upscale", "interpolate")
 
 
-def test_work_dir_name_survives_awkward_characters(tmp_path: Path):
-    work = WorkDir.for_input(Path("my holiday #1 (4k).mp4"), base=tmp_path)
-    assert " " not in work.root.name
-    assert "#" not in work.root.name
+def test_interpolate_first_reverses_the_two_model_stages():
+    assert pipeline.stage_order("interpolate-first") == ("interpolate", "upscale")
 
 
-def test_create_is_idempotent_and_cleanup_removes(tmp_path: Path):
-    work = WorkDir.for_input(Path("clip.mp4"), base=tmp_path).create()
-    _fill(work.frames_in, 2)
-    work.create()  # must not wipe what is already there
-    assert count_frames_on_disk(work.frames_in) == 2
-    work.cleanup()
-    assert not work.root.exists()
+def test_an_unknown_order_is_rejected():
+    with pytest.raises(ValueError, match="unknown stage order"):
+        pipeline.stage_order("sideways")
 
 
-def test_cleanup_keep_leaves_the_directory(tmp_path: Path):
-    work = WorkDir.for_input(Path("clip.mp4"), base=tmp_path).create()
-    work.cleanup(keep=True)
-    assert work.root.exists()
+@requires_ffmpeg
+def test_full_run_reports_every_stage_in_order(
+    sample_video: Path, tmp_path: Path, ncnn_stubs
+):
+    result = run_pipeline(
+        sample_video,
+        tmp_path / "out.mp4",
+        Options(scale=2, target_fps=60, keep_temp=True),
+        work=pipeline.WorkDir.for_input(sample_video, base=tmp_path / "work"),
+    )
+    assert stage_names(result) == ["extract", "upscale", "interpolate"]
+    assert result.output.exists()
+    # 3 seconds of 30 fps doubled to 60.
+    assert result.frames == 180
+    assert float(result.fps) == 60
 
 
-def test_cleanup_is_safe_when_nothing_exists(tmp_path: Path):
-    WorkDir.for_input(Path("clip.mp4"), base=tmp_path).cleanup()
+@requires_ffmpeg
+def test_interpolate_first_runs_rife_on_the_source_frames(
+    sample_video: Path, tmp_path: Path, ncnn_stubs
+):
+    """RIFE must see the extracted frames, and Real-ESRGAN the interpolated ones."""
+    work = pipeline.WorkDir.for_input(sample_video, base=tmp_path / "work")
+    result = run_pipeline(
+        sample_video,
+        tmp_path / "out.mp4",
+        Options(scale=2, target_fps=60, order="interpolate-first", keep_temp=True),
+        work=work,
+    )
+    assert stage_names(result) == ["extract", "interpolate", "upscale"]
+    assert result.frames == 180
+
+    calls = ncnn_stubs.log.read_text().splitlines()
+    rife = next(line for line in calls if "rife" in line)
+    esrgan = next(line for line in calls if "realesr" in line)
+    assert f"-i {work.frames_in} " in f"{rife} "
+    assert f"-i {work.frames_out} " in f"{esrgan} "
 
 
-def test_free_bytes_walks_up_to_an_existing_parent(tmp_path: Path):
-    work = WorkDir.for_input(Path("clip.mp4"), base=tmp_path / "not" / "created" / "yet")
-    assert work.free_bytes() > 0
+@requires_ffmpeg
+def test_scale_one_skips_the_upscale_stage(sample_video: Path, tmp_path: Path, ncnn_stubs):
+    result = run_pipeline(
+        sample_video,
+        tmp_path / "out.mp4",
+        Options(scale=1, target_fps=60),
+        work=pipeline.WorkDir.for_input(sample_video, base=tmp_path / "work"),
+    )
+    assert stage_names(result) == ["extract", "interpolate"]
 
 
-def test_frames_complete_counts_only_the_right_format(tmp_path: Path):
-    _fill(tmp_path, 3, "png")
-    assert frames_complete(tmp_path, 3) is True
-    assert frames_complete(tmp_path, 3, "jpg") is False
+@requires_ffmpeg
+def test_a_target_fps_at_or_below_the_source_skips_interpolation(
+    sample_video: Path, tmp_path: Path, ncnn_stubs
+):
+    result = run_pipeline(
+        sample_video,
+        tmp_path / "out.mp4",
+        Options(scale=2, target_fps=30),
+        work=pipeline.WorkDir.for_input(sample_video, base=tmp_path / "work"),
+    )
+    assert stage_names(result) == ["extract", "upscale"]
+    assert float(result.fps) == 30
 
 
-def test_frames_complete_needs_every_frame(tmp_path: Path):
-    _fill(tmp_path, 2)
-    assert frames_complete(tmp_path, 3) is False
-    assert frames_complete(tmp_path, 2) is True
-
-
-def test_unknown_expected_count_is_never_complete(tmp_path: Path):
-    _fill(tmp_path, 5)
-    # Zero means "we do not know", which must not skip the stage.
-    assert frames_complete(tmp_path, 0) is False
-    assert stage_is_done("extract", tmp_path, 0) is False
-
-
-def test_missing_directory_counts_as_empty(tmp_path: Path):
-    assert count_frames_on_disk(tmp_path / "nope") == 0
-    assert frames_complete(tmp_path / "nope", 1) is False
-
-
-def test_frame_pattern_matches_the_padding():
-    assert frame_pattern("png") == "%08d.png"
-    assert frame_pattern("jpg") == "%08d.jpg"
-
-
-def test_jpg_frames_are_estimated_smaller_than_png():
-    assert estimate_frame_bytes(1920, 1080, "jpg") < estimate_frame_bytes(1920, 1080, "png")
-
-
-def test_estimate_scales_with_resolution_and_frame_count():
-    small = estimate_disk_usage(640, 480, 100, scale=2, target_fps=30, source_fps=30)
-    large = estimate_disk_usage(1920, 1080, 100, scale=2, target_fps=30, source_fps=30)
-    assert large.total > small.total * 5
-
-
-def test_estimate_counts_interpolated_frames():
-    same = estimate_disk_usage(640, 480, 100, scale=1, target_fps=30, source_fps=30)
-    doubled = estimate_disk_usage(640, 480, 100, scale=1, target_fps=60, source_fps=30)
-    assert doubled.stages["frames_out"] == same.stages["frames_out"] * 2
-
-
-def test_estimate_ignores_a_lower_target_fps():
-    estimate = estimate_disk_usage(640, 480, 100, scale=1, target_fps=15, source_fps=30)
-    assert estimate.stages["frames_out"] == estimate.stages["frames_in"]
-
-
-def test_estimate_fits_compares_against_free_space():
-    assert SpaceEstimate(stages={"a": 10}, free=100).fits is True
-    assert SpaceEstimate(stages={"a": 1000}, free=100).fits is False
-
-
-def test_estimate_render_names_each_stage():
-    rendered = estimate_disk_usage(
-        640, 480, 10, scale=2, target_fps=60, source_fps=30, free=10**9
-    ).render()
-    for stage in ("frames_in", "frames_up", "frames_out"):
-        assert stage in rendered
-    assert "free" in rendered
-
-
-def test_human_bytes_picks_sensible_units():
-    assert human_bytes(512) == "512 B"
-    assert human_bytes(2 * 1024) == "2 KB"
-    assert human_bytes(5 * 1024**2) == "5.0 MB"
-    assert human_bytes(3 * 1024**3) == "3.0 GB"
+@requires_ffmpeg
+def test_refuses_to_overwrite_the_input(sample_video: Path, tmp_path: Path):
+    with pytest.raises(ValueError, match="overwrite the input"):
+        run_pipeline(sample_video, sample_video, work=pipeline.WorkDir.for_input(
+            sample_video, base=tmp_path / "work"
+        ))

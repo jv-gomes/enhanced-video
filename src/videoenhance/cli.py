@@ -16,15 +16,13 @@ from .doctor import report as doctor_report
 from .encode import EncodeError, describe_chain, encoder_chain
 from .extract import ExtractError
 from .interpolate import InterpolateError
-from .pipeline import Options, WorkDir, estimate_disk_usage, run_pipeline
+from .pipeline import ORDERS, Options, WorkDir, estimate_disk_usage, run_pipeline
 from .pipeline import human_bytes as pipeline_human
 from .probe import ProbeError, probe
 from .process import ToolError
 from .upscale import ModelError, UpscaleError, resolve_model
 
 logger = logging.getLogger("videoenhance")
-
-ORDERS = ("upscale-first", "interpolate-first")
 
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -74,11 +72,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--order",
-        default=ORDERS[0],
+        default=config.DEFAULT_ORDER,
         choices=ORDERS,
         help=(
-            "stage order; upscale-first is cheaper because it runs before the "
-            f"frame count is multiplied (default: {ORDERS[0]})"
+            "stage order; upscale-first is cheaper because Real-ESRGAN then "
+            "runs before the frame count is multiplied, while interpolate-first "
+            "lets RIFE see the original pixels "
+            f"(default: {config.DEFAULT_ORDER})"
         ),
     )
     parser.add_argument(
@@ -146,6 +146,7 @@ def options_from_args(args: argparse.Namespace) -> Options:
         target_fps=args.fps,
         model=args.model,
         frame_format=args.frame_format,
+        order=args.order,
         gpu=args.gpu,
         tile=args.tile,
         keep_temp=args.keep_temp,
@@ -264,6 +265,7 @@ def main(argv: list[str] | None = None) -> int:
         target_fps=args.fps,
         source_fps=info.fps,
         frame_format=args.frame_format,
+        order=args.order,
         free=work.free_bytes(),
     )
 

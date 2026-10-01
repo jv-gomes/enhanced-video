@@ -38,11 +38,20 @@ from .workdir import (
 
 logger = logging.getLogger(__name__)
 
+# The order names live in config, with the other defaults, so that the disk
+# estimate in workdir can honour them too.
+ORDER_UPSCALE_FIRST = config.ORDER_UPSCALE_FIRST
+ORDER_INTERPOLATE_FIRST = config.ORDER_INTERPOLATE_FIRST
+ORDERS = config.ORDERS
+
 # Re-exported so callers can treat the pipeline as the single entry point.
 __all__ = [
     "FRAMES_IN",
     "FRAMES_OUT",
     "FRAMES_UP",
+    "ORDERS",
+    "ORDER_INTERPOLATE_FIRST",
+    "ORDER_UPSCALE_FIRST",
     "Options",
     "Result",
     "SpaceEstimate",
@@ -57,6 +66,7 @@ __all__ = [
     "human_bytes",
     "run_pipeline",
     "stage_is_done",
+    "stage_order",
 ]
 
 
@@ -69,6 +79,7 @@ class Options:
     model: str = config.DEFAULT_UPSCALE_MODEL
     rife_model: str = config.DEFAULT_RIFE_MODEL
     frame_format: str = config.DEFAULT_FRAME_FORMAT
+    order: str = config.DEFAULT_ORDER
     gpu: int = config.DEFAULT_GPU_ID
     tile: int = config.DEFAULT_TILE_SIZE
     threads: str = config.DEFAULT_THREADS
@@ -109,6 +120,116 @@ class Result:
         return "\n".join(lines)
 
 
+@dataclass(frozen=True)
+class _Frames:
+    """What the next stage needs to know about the frames it will read.
+
+    Carried from stage to stage so that either order works without a stage
+    having to guess what ran before it: interpolating first means RIFE sees the
+    source resolution, and upscaling first means it sees the upscaled one, and
+    only this record knows which.
+    """
+
+    directory: Path
+    count: int
+    fps: Fraction
+    width: int
+    height: int
+
+
+def _upscale_stage(
+    frames: _Frames,
+    work: WorkDir,
+    options: Options,
+    stages: list[Stage],
+    bins: Binaries | None,
+) -> _Frames:
+    """Run Real-ESRGAN, unless the requested scale is 1."""
+    if options.scale <= 1:
+        logger.info("skipping upscale: scale is 1")
+        return frames
+
+    result = upscale(
+        frames.directory,
+        work.frames_up,
+        expected_frames=frames.count,
+        scale=options.scale,
+        model=options.model,
+        frame_format=options.frame_format,
+        gpu=options.gpu,
+        tile=options.tile,
+        threads=options.threads,
+        bins=bins,
+    )
+    detail = f"{options.scale}x with {options.model}"
+    if result.tile:
+        detail += f", tile {result.tile}"
+    stages.append(Stage("upscale", result.frame_count, detail, result.skipped))
+    return _Frames(
+        directory=result.frames_dir,
+        count=result.frame_count,
+        fps=frames.fps,
+        width=frames.width * options.scale,
+        height=frames.height * options.scale,
+    )
+
+
+def _interpolate_stage(
+    frames: _Frames,
+    work: WorkDir,
+    options: Options,
+    stages: list[Stage],
+    bins: Binaries | None,
+) -> _Frames:
+    """Run RIFE, unless the target frame rate is not above the source's."""
+    if not is_needed(frames.fps, options.target_fps):
+        logger.info(
+            "skipping interpolation: %g fps is not above the source's %s",
+            options.target_fps,
+            frames.fps,
+        )
+        return frames
+
+    result = interpolate(
+        frames.directory,
+        work.frames_out,
+        target_frames=target_frame_count(frames.count, frames.fps, options.target_fps),
+        model=options.rife_model,
+        frame_format=options.frame_format,
+        gpu=options.gpu,
+        threads=options.threads,
+        width=frames.width,
+        height=frames.height,
+        bins=bins,
+    )
+    detail = f"to {float(options.target_fps):g} fps" + (", UHD mode" if result.uhd else "")
+    stages.append(Stage("interpolate", result.frame_count, detail, result.skipped))
+    return _Frames(
+        directory=result.frames_dir,
+        count=result.frame_count,
+        fps=Fraction(options.target_fps).limit_denominator(100000),
+        width=frames.width,
+        height=frames.height,
+    )
+
+
+#: The two stages the order switches between, by name.
+_MODEL_STAGES = {"upscale": _upscale_stage, "interpolate": _interpolate_stage}
+
+
+def stage_order(order: str = config.DEFAULT_ORDER) -> tuple[str, ...]:
+    """The two GPU stages, in the order ``order`` asks for.
+
+    Raises:
+        ValueError: the order is not one of :data:`ORDERS`.
+    """
+    if order == ORDER_UPSCALE_FIRST:
+        return ("upscale", "interpolate")
+    if order == ORDER_INTERPOLATE_FIRST:
+        return ("interpolate", "upscale")
+    raise ValueError(f"unknown stage order: {order!r} (expected one of {', '.join(ORDERS)})")
+
+
 def run_pipeline(
     input_path: Path,
     output: Path,
@@ -120,15 +241,18 @@ def run_pipeline(
 ) -> Result:
     """Run every stage and return what was produced.
 
-    The stages write into fixed directories named after the tool that fills
-    them, so a crashed run resumes from wherever it stopped, and the work
-    directory is removed only after the output file exists.
+    Each stage writes into a directory named after the tool that fills it, so
+    the two orders share their scratch space and a crashed run resumes from
+    wherever it stopped. The work directory is removed only after the output
+    file exists.
 
     Raises:
         FileNotFoundError: the input does not exist.
-        ValueError: the output would overwrite the input.
+        ValueError: the output would overwrite the input, or the order is not
+            one of :data:`ORDERS`.
     """
     options = options or Options()
+    order = stage_order(options.order)
     info = info or probe(input_path)
     output = Path(output)
     if output.resolve() == Path(info.path).resolve():
@@ -147,69 +271,20 @@ def run_pipeline(
         )
     )
 
-    frames = extracted.frames_dir
-    frame_count = extracted.frame_count
-    fps: Fraction = extracted.fps
-
-    if options.scale > 1:
-        upscaled = upscale(
-            frames,
-            work.frames_up,
-            expected_frames=frame_count,
-            scale=options.scale,
-            model=options.model,
-            frame_format=options.frame_format,
-            gpu=options.gpu,
-            tile=options.tile,
-            threads=options.threads,
-            bins=bins,
-        )
-        stages.append(
-            Stage(
-                "upscale",
-                upscaled.frame_count,
-                f"{options.scale}x with {options.model}",
-                upscaled.skipped,
-            )
-        )
-        frames = upscaled.frames_dir
-        frame_count = upscaled.frame_count
-    else:
-        logger.info("skipping upscale: scale is 1")
-
-    if is_needed(fps, options.target_fps):
-        target = target_frame_count(frame_count, fps, options.target_fps)
-        interpolated = interpolate(
-            frames,
-            work.frames_out,
-            target_frames=target,
-            model=options.rife_model,
-            frame_format=options.frame_format,
-            gpu=options.gpu,
-            threads=options.threads,
-            width=info.width * options.scale,
-            height=info.height * options.scale,
-            bins=bins,
-        )
-        stages.append(
-            Stage(
-                "interpolate",
-                interpolated.frame_count,
-                f"to {float(options.target_fps):g} fps"
-                + (", UHD mode" if interpolated.uhd else ""),
-                interpolated.skipped,
-            )
-        )
-        frames = interpolated.frames_dir
-        frame_count = interpolated.frame_count
-        fps = Fraction(options.target_fps).limit_denominator(100000)
-    else:
-        logger.info("skipping interpolation: %s fps is not above %s", options.target_fps, fps)
+    frames = _Frames(
+        directory=extracted.frames_dir,
+        count=extracted.frame_count,
+        fps=extracted.fps,
+        width=info.width,
+        height=info.height,
+    )
+    for name in order:
+        frames = _MODEL_STAGES[name](frames, work, options, stages, bins)
 
     encoder = encode(
-        frames,
+        frames.directory,
         output,
-        fps=fps,
+        fps=frames.fps,
         audio_source=extracted.audio_source if extracted.has_audio else None,
         frame_format=options.frame_format,
         prefer=options.prefer_encoder,
@@ -223,7 +298,7 @@ def run_pipeline(
     return Result(
         output=output,
         encoder=encoder.name,
-        fps=fps,
-        frames=frame_count,
+        fps=frames.fps,
+        frames=frames.count,
         stages=stages,
     )

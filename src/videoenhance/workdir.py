@@ -196,12 +196,19 @@ def estimate_disk_usage(
     target_fps: float,
     source_fps: float,
     frame_format: str = config.DEFAULT_FRAME_FORMAT,
+    order: str = config.DEFAULT_ORDER,
     free: int = 0,
 ) -> SpaceEstimate:
     """Estimate the peak disk cost of the intermediate frame directories.
 
     All three stage directories are counted, because a resumable pipeline
     cannot delete the input frames of a stage it may have to run again.
+
+    The order matters to the total. Upscaling first stores two full-size
+    directories, the upscaled source frames and the interpolated ones;
+    interpolating first keeps its intermediate at the source resolution and so
+    costs less disk, while paying for it in GPU time, because Real-ESRGAN then
+    has the multiplied frame count to work through.
     """
     per_source = estimate_frame_bytes(width, height, frame_format)
     per_upscaled = estimate_frame_bytes(width * scale, height * scale, frame_format)
@@ -209,11 +216,19 @@ def estimate_disk_usage(
     if source_fps > 0 and target_fps > source_fps:
         interpolated = int(frame_count * (target_fps / source_fps))
 
-    return SpaceEstimate(
-        stages={
+    if order == config.ORDER_INTERPOLATE_FIRST:
+        # frames_in -> frames_out (RIFE, source resolution) -> frames_up.
+        stages = {
+            FRAMES_IN: per_source * frame_count,
+            FRAMES_OUT: per_source * interpolated,
+            FRAMES_UP: per_upscaled * interpolated,
+        }
+    else:
+        # frames_in -> frames_up (Real-ESRGAN, source frame count) -> frames_out.
+        stages = {
             FRAMES_IN: per_source * frame_count,
             FRAMES_UP: per_upscaled * frame_count,
             FRAMES_OUT: per_upscaled * interpolated,
-        },
-        free=free,
-    )
+        }
+
+    return SpaceEstimate(stages=stages, free=free)

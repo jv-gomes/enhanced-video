@@ -99,23 +99,34 @@ def write_stub(path: Path, body: str) -> Path:
 
 
 #: Records every argument list it is called with, one per line, then copies the
-#: input frames to the output directory unchanged.
+#: input frames to the output directory. A numeric ``-n`` (RIFE's output frame
+#: count; Real-ESRGAN's ``-n`` is a model name) is honoured by duplicating the
+#: last frame, so the stub returns as many frames as the real binary would.
 STUB_RECORDING = """
 set -euo pipefail
 echo "$@" >> "$ARGV_LOG"
-IN=""; OUT=""; FMT="png"
+IN=""; OUT=""; FMT="png"; WANT=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -i) IN="$2"; shift 2;;
     -o) OUT="$2"; shift 2;;
-    -f) FMT="$2"; shift 2;;
+    -f) FMT="${2##*.}"; shift 2;;
+    -n) [[ "$2" =~ ^[0-9]+$ ]] && WANT="$2"; shift 2;;
     *) shift;;
   esac
 done
 mkdir -p "$OUT"
+count=0
 for f in "$IN"/*."$FMT"; do
   [[ -e "$f" ]] || continue
-  cp "$f" "$OUT/$(basename "$f")"
+  count=$((count + 1))
+  cp "$f" "$OUT/$(printf '%08d' $count).$FMT"
+done
+[[ $count -gt 0 ]] || exit 0
+last="$OUT/$(printf '%08d' $count).$FMT"
+while [[ $count -lt $WANT ]]; do
+  count=$((count + 1))
+  cp "$last" "$OUT/$(printf '%08d' $count).$FMT"
 done
 """
 
