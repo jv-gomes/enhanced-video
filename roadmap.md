@@ -43,7 +43,7 @@ machine is ready, before any GPU code exists.
       `run(cmd: list[str])` and `ToolError`. Logs the command, captures stderr,
       raises with the stderr tail on a non-zero exit. Never `shell=True`.
       Every external call in the project goes through this.
-- [ ] `feat(config): add binary paths and platform resolution` — `config.py`
+- [x] `feat(config): add binary paths and platform resolution` — `config.py`
       with the `bin/realesrgan/` and `bin/rife/` defaults, `.exe` suffix
       resolution via `sys.platform`, environment overrides
       (`REALESRGAN_BIN`, `RIFE_BIN`, `FFMPEG_BIN`, `FFPROBE_BIN`) and the
