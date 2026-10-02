@@ -81,6 +81,13 @@ class Options:
     rife_model: str = config.DEFAULT_RIFE_MODEL
     frame_format: str = config.DEFAULT_FRAME_FORMAT
     order: str = config.DEFAULT_ORDER
+    #: Seconds per chunk, 0 meaning "process the file in a single pass".
+    #: Honoured by :func:`videoenhance.chunk.run_chunked`, which drives this
+    #: pipeline once per chunk.
+    chunk_seconds: float = config.DEFAULT_CHUNK_SECONDS
+    #: Carry the source's audio into the output. Chunked mode turns this off
+    #: for the individual parts and muxes the audio once, at the end.
+    mux_audio: bool = True
     #: Draw a progress bar per stage. The CLI turns this on for a terminal.
     progress: bool = False
     gpu: int = config.DEFAULT_GPU_ID
@@ -99,11 +106,14 @@ class Stage:
     frames: int
     detail: str = ""
     skipped: bool = False
+    #: What ``frames`` counts. Every stage but the chunked run's summary
+    #: counts frames.
+    unit: str = "frames"
 
     def render(self) -> str:
         suffix = " (already done)" if self.skipped else ""
         detail = f", {self.detail}" if self.detail else ""
-        return f"{self.name}: {self.frames} frames{detail}{suffix}"
+        return f"{self.name}: {self.frames} {self.unit}{detail}{suffix}"
 
 
 @dataclass(frozen=True)
@@ -204,6 +214,12 @@ def _interpolate_stage(
             options.target_fps,
             frames.fps,
         )
+        return frames
+    if frames.count < 2:
+        # RIFE interpolates *between* frames, so one frame has nothing to pair
+        # with. A single-frame chunk is rare but reachable: it is whatever is
+        # left over at the end of a chunked run.
+        logger.info("skipping interpolation: %d frame is not enough", frames.count)
         return frames
 
     target = target_frame_count(frames.count, frames.fps, options.target_fps)
@@ -316,7 +332,9 @@ def run_pipeline(
         frames.directory,
         output,
         fps=frames.fps,
-        audio_source=extracted.audio_source if extracted.has_audio else None,
+        audio_source=(
+            extracted.audio_source if extracted.has_audio and options.mux_audio else None
+        ),
         frame_format=options.frame_format,
         prefer=options.prefer_encoder,
         allow_hardware=options.allow_hardware,
