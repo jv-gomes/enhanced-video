@@ -45,6 +45,12 @@ DEFAULT_ORDER = ORDER_UPSCALE_FIRST
 DEFAULT_SCALE = 2
 DEFAULT_TARGET_FPS = 60
 DEFAULT_FRAME_FORMAT = "png"
+
+#: Seconds of video processed per chunk. The frames of one chunk are the whole
+#: disk cost of a run, so this is what keeps a two-hour film from needing
+#: hundreds of gigabytes of scratch space. 0 disables chunking and processes
+#: the file in a single pass.
+DEFAULT_CHUNK_SECONDS = 30.0
 FRAME_FORMATS = ("png", "jpg")
 FRAME_PATTERN = "%08d"
 

@@ -23,6 +23,13 @@ FRAMES_UP = "frames_up"
 FRAMES_OUT = "frames_out"
 #: CFR-normalised copy of a VFR input; also the audio source in that case.
 CFR_NAME = "cfr.mkv"
+#: Chunked-mode directories: the source cut into pieces, the encoded pieces,
+#: and the scratch space of the one chunk being worked on right now.
+CHUNKS_NAME = "chunks"
+PARTS_NAME = "parts"
+CURRENT_NAME = "current"
+#: Marker inside ``current/`` naming the chunk its frames belong to.
+CURRENT_MARKER = "chunk.txt"
 
 
 def frame_glob(frame_format: str = config.DEFAULT_FRAME_FORMAT) -> str:
@@ -151,9 +158,63 @@ class WorkDir:
     def stage_dirs(self) -> tuple[Path, Path, Path]:
         return (self.frames_in, self.frames_up, self.frames_out)
 
-    def create(self) -> WorkDir:
-        """Create the directory tree, reusing whatever is already there."""
-        for directory in (self.root, *self.stage_dirs):
+    @property
+    def chunks(self) -> Path:
+        """The source video cut into chunks, in chunked mode."""
+        return self.root / CHUNKS_NAME
+
+    @property
+    def parts(self) -> Path:
+        """The encoded output of each chunk, awaiting concatenation."""
+        return self.root / PARTS_NAME
+
+    @property
+    def current(self) -> Path:
+        """Scratch space for the one chunk being processed.
+
+        Every chunk reuses this directory and it is removed once that chunk's
+        part exists, which is what bounds the disk cost of a chunked run to a
+        single chunk's frames.
+        """
+        return self.root / CURRENT_NAME
+
+    def claim_current(self, chunk: Path) -> WorkDir:
+        """Hand ``current/`` to ``chunk``, clearing another chunk's leftovers.
+
+        Returns the :class:`WorkDir` the stages should use. Resuming only works
+        because the frames in a stage directory are counted against what the
+        stage expects, so frames left by a *different* chunk would be
+        miscounted as finished work. The marker file is what tells the two
+        apart; when it does not name this chunk, the directory is thrown away
+        before anything looks inside it.
+        """
+        inner = WorkDir(root=self.current)
+        marker = self.current / CURRENT_MARKER
+        if self.current.exists():
+            previous = marker.read_text().strip() if marker.exists() else ""
+            if previous != chunk.name:
+                logger.info(
+                    "clearing %s: it holds frames for %s, not %s",
+                    self.current,
+                    previous or "an unknown chunk",
+                    chunk.name,
+                )
+                shutil.rmtree(self.current, ignore_errors=True)
+        inner.create()
+        marker.write_text(f"{chunk.name}\n")
+        return inner
+
+    def create(self, *, stages: bool = True) -> WorkDir:
+        """Create the directory tree, reusing whatever is already there.
+
+        Args:
+            stages: Also create the three frame directories. A chunked run
+                does not use them at this level — its frames live in
+                ``current/`` — so it asks for just the root and would
+                otherwise leave three empty directories behind to puzzle over.
+        """
+        wanted = (self.root, *self.stage_dirs) if stages else (self.root,)
+        for directory in wanted:
             directory.mkdir(parents=True, exist_ok=True)
         logger.debug("work directory ready: %s", self.root)
         return self
