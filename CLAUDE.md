@@ -47,8 +47,10 @@ The user's machine has an **AMD graphics card**. This defines the entire stack:
 │   ├── extract.py            # video -> frames
 │   ├── upscale.py            # calls realesrgan-ncnn-vulkan
 │   ├── interpolate.py        # calls rife-ncnn-vulkan
-│   ├── encode.py             # frames + audio -> final video
-│   └── pipeline.py           # orchestrates the steps and the work directory
+│   ├── encode.py             # frames + audio -> final video, concat of parts
+│   ├── pipeline.py           # orchestrates the steps and the work directory
+│   ├── chunk.py              # splits long videos, runs the pipeline per chunk
+│   └── state.py              # the saved job: --jobs, --resume, --restart
 ├── tests/
 └── work/                     # temporary frames (gitignored)
 ```
@@ -58,6 +60,30 @@ The user's machine has an **AMD graphics card**. This defines the entire stack:
 Default order: **extract → upscale → interpolate → encode**.
 
 Reason: upscaling is the most expensive step, so it runs before the frame count is multiplied. Keep the order configurable (`--order interpolate-first`) for those who prefer interpolating at the original resolution.
+
+Videos longer than `--chunk` seconds (default 30, `0` disables) run that whole
+sequence **once per chunk**, in `chunk.py`: cut the source with
+`-f segment -c copy`, process one chunk into an encoded part, delete that
+chunk's frames, then concatenate the parts and mux the original audio once at
+the end. Peak disk is one chunk rather than the whole film. Two rules there are
+load-bearing:
+
+- **Never give a part its own audio.** A `-shortest` per part accumulates into
+  audible drift; the audio is muxed a single time, at the concatenation.
+- **Pin the encoder** to whatever the first part used, since the parts are
+  joined by stream copy and the encoder chain may fall back at run time.
+
+Every run records itself in `work/<job>/state.json` (`state.py`), which is what
+`--jobs` lists and `--resume <id>` continues. The rule for that file: **it holds
+only what cannot be derived from the files.** Settings, input, output and the
+chunked cut go in; progress stays on disk, because a recorded count can
+disagree with reality and a resume that lies is worse than one that is slow.
+
+Its real job is to refuse a resume whose options changed. The stage guards are
+frame counts (`stage_is_done`), and a frame count does not move when `--scale`
+or `--model` does, so without the check a job restarted at a different scale
+silently skips the upscale. `PIXEL_OPTIONS` in `state.py` is the list that may
+not change; anything not in it (`--gpu`, `--tile`, `--keep-temp`) may.
 
 ### 1. Probe
 ```bash
@@ -130,12 +156,12 @@ ffmpeg -f lavfi -i testsrc=size=320x240:rate=30 -f lavfi -i sine=frequency=440 \
 - Commands are always argument lists, never `shell=True`.
 - Use `pathlib.Path` for all paths (must work on both Windows and Linux).
 - Binary paths come from `config.py` and can be overridden by environment variables (`REALESRGAN_BIN`, `RIFE_BIN`).
-- Every step must be **resumable**: if the output folder already contains all expected frames, skip the step. Long videos take hours and the user should not lose progress if something crashes.
+- Every step must be **resumable**: if the output folder already contains all expected frames, skip the step. Long videos take hours and the user should not lose progress if something crashes. A new option that changes the pixels must be added to `PIXEL_OPTIONS` in `state.py`, or resuming with it changed will silently reuse work made the old way.
 - Provide a `--keep-temp` option to keep `work/`; by default, clean up after a successful run.
 
 ## Known pitfalls
 
-- **Disk space:** PNG frames take up a lot of space. One minute of 1080p at 60 FPS after upscaling can exceed tens of GB. Estimate the required space at startup and warn the user. Offer `--frame-format jpg` as an option (smaller, slightly lossy).
+- **Disk space:** PNG frames take up a lot of space. One minute of 1080p at 60 FPS after upscaling can exceed tens of GB. Chunked mode is the answer and is on by default, so the cost is one chunk rather than the whole film; `--chunk 0` opts out. Estimate the required space at startup and warn the user. Offer `--frame-format jpg` as an option (smaller, slightly lossy).
 - **VRAM:** Vulkan allocation errors are almost always solved by lowering `-t` in Real-ESRGAN or disabling `-u` in RIFE.
 - **Audio out of sync:** almost always a VFR video. See the probe step.
 - **Scene cuts:** RIFE can produce "ghost" frames on hard transitions. Future improvement: detect cuts with FFmpeg's `scdet` filter and duplicate the frame instead of interpolating at those points.

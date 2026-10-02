@@ -147,6 +147,53 @@ and disk usage problems surface, so it comes before the GPU steps.
 - [ ] `chore(ci): add lint and test workflow` — run `ruff` and `pytest` on
       push, without a GPU.
 
+## M7 — Chunked processing
+
+Goal: peak disk that does not grow with the length of the video. Found by
+running the pipeline on real footage: a 3-second clip already wanted 128 MB of
+frames, which puts a feature film in the hundreds of gigabytes.
+
+- [x] `feat(chunk): cut the source into chunks` — `chunk.py` with `split()`,
+      cutting with `-f segment -c copy` into video-only chunks plus a
+      manifest, normalising a VFR source to CFR once beforehand, and re-cutting
+      losslessly any chunk that came out more than twice the requested length
+      because the source's keyframes were too sparse.
+- [x] `feat(chunk): run the pipeline once per chunk` — `run_chunked()`, which
+      drives `run_pipeline` into one part per chunk, reuses a single
+      `current/` scratch directory (guarded by a marker file so a resume
+      cannot mix two chunks' frames) and deletes each chunk's frames and
+      source as soon as its part exists.
+- [x] `feat(encode): concatenate the parts and mux the audio` — `concat()`,
+      joining the parts by stream copy and muxing the original audio exactly
+      once, with the encoder pinned to the first part's so the copy is valid.
+- [x] `feat(cli): add --chunk and --encoder` — chunking on by default at 30 s,
+      `--chunk 0` for the single-pass path, the disk estimate built from one
+      chunk, and `--encoder` to force one when the chain would otherwise
+      differ between parts.
+- [x] `test(chunk): cover the cut, the resume and the cleanup` — the chunks
+      adding back up to the source, no audio in a chunk, the re-cut fallback,
+      the encoder pin, and that a finished run leaves no frames behind.
+
+## M8 — Saved jobs
+
+Goal: stop and continue days later, without remembering the command and without
+corrupting the result. Found while testing M7: resuming with a different
+`--scale` reuses the old frames, because every stage guard is a frame count and
+the count does not change with the scale.
+
+- [x] `feat(state): record the job in state.json` — `state.py` with the record,
+      an atomic write, lookup by id or unambiguous prefix, disk-derived progress
+      and the option comparison. Only what cannot be derived is stored.
+- [x] `refactor(chunk): keep the cut in the job record` — `manifest.json` folded
+      into `state.json`, and `ChunkPlan` now carries the updated record so a
+      later save cannot wipe the cut back out.
+- [x] `feat(cli): add --jobs, --resume and --restart` — the listing, resume by
+      id, and the refusal when the options or the input file changed. The
+      pixel-affecting flags lose their argparse defaults so that "asked for" and
+      "left alone" can be told apart.
+- [x] `test(state): cover the record, the lookup and the refusal` — including
+      the regression test for the silent `--scale` change, in both modes.
+
 ## Backlog / future
 
 - **Scene-cut detection:** use FFmpeg's `scdet` filter to find hard cuts and
