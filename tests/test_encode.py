@@ -14,9 +14,11 @@ from videoenhance.encode import (
     available_encoders,
     best_encoder,
     build_encode_cmd,
+    concat,
     describe_chain,
     encode,
     encoder_chain,
+    write_concat_list,
 )
 from videoenhance.extract import extract
 from videoenhance.pipeline import WorkDir
@@ -196,3 +198,35 @@ def test_encode_reports_when_no_encoder_exists(tmp_path: Path):
     (frames / "00000001.png").touch()
     with pytest.raises(EncodeError, match="no usable video encoder"):
         encode(frames, tmp_path / "out.mp4", fps=30, chain=[])
+
+
+# --------------------------------------------------------------------------
+# joining already-encoded parts
+# --------------------------------------------------------------------------
+
+
+def test_concat_needs_something_to_join(tmp_path: Path):
+    with pytest.raises(EncodeError, match="no parts"):
+        concat([], tmp_path / "out.mkv")
+
+
+def test_concat_names_the_parts_that_are_missing(tmp_path: Path):
+    with pytest.raises(EncodeError, match="part_0001"):
+        concat([tmp_path / "part_0001.mkv"], tmp_path / "out.mkv")
+
+
+def test_concat_refuses_to_write_over_a_part(tmp_path: Path):
+    part = tmp_path / "part_0000.mkv"
+    part.write_bytes(b"data")
+    with pytest.raises(ValueError, match="overwrite a part"):
+        concat([part], part)
+
+
+def test_the_concat_list_quotes_awkward_names(tmp_path: Path):
+    """A directory with a space or an apostrophe must not break the playlist."""
+    listing = write_concat_list(
+        [tmp_path / "a b.mkv", tmp_path / "it's.mkv"], tmp_path / "list.txt"
+    )
+    lines = listing.read_text().splitlines()
+    assert lines[0] == f"file '{tmp_path}/a b.mkv'"
+    assert lines[1] == f"file '{tmp_path}/it'\\''s.mkv'"

@@ -159,6 +159,95 @@ class EncodeError(RuntimeError):
     """No encoder in the chain managed to produce the output file."""
 
 
+#: Name of the concat demuxer's playlist, written next to the parts.
+CONCAT_LIST = "list.txt"
+
+
+def write_concat_list(parts: list[Path], destination: Path) -> Path:
+    """Write the concat demuxer playlist for ``parts``.
+
+    Paths are absolute and single-quoted, with any quote in a name escaped the
+    way the demuxer expects, so a directory with a space or an apostrophe in it
+    does not break the list.
+    """
+    lines = []
+    for part in parts:
+        quoted = str(part.resolve()).replace("'", r"'\''")
+        lines.append(f"file '{quoted}'")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text("\n".join(lines) + "\n")
+    return destination
+
+
+def concat(
+    parts: list[Path],
+    output: Path,
+    *,
+    audio_source: Path | None = None,
+    list_path: Path | None = None,
+    bins: Binaries | None = None,
+) -> Path:
+    """Join already-encoded ``parts`` into ``output``, adding audio.
+
+    The parts are copied, not re-encoded: they came out of the same encoder
+    with the same settings, so there is nothing to gain from decoding them
+    again. The audio is muxed here, once, from the original file rather than
+    per part — a ``-shortest`` on every part would trim each one to its own
+    shorter stream, and that sub-frame error accumulates into audible drift
+    over a long video.
+
+    Raises:
+        EncodeError: ``parts`` is empty or one of the files is missing.
+        ValueError: the output would overwrite a part or the audio source.
+    """
+    bins = bins or binaries()
+    if not parts:
+        raise EncodeError("nothing to concatenate: no parts were produced")
+    missing = [part for part in parts if not part.exists()]
+    if missing:
+        raise EncodeError(
+            "cannot concatenate, these parts are missing:\n  "
+            + "\n  ".join(str(part) for part in missing)
+        )
+
+    resolved = output.resolve()
+    if audio_source and resolved == audio_source.resolve():
+        raise ValueError(f"refusing to overwrite the input video: {output}")
+    if any(resolved == part.resolve() for part in parts):
+        raise ValueError(f"refusing to overwrite a part with the output: {output}")
+
+    list_path = write_concat_list(parts, list_path or parts[0].parent / CONCAT_LIST)
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    partial = output.with_suffix(f".part{output.suffix}")
+    cmd: list[object] = [
+        bins.ffmpeg,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        # The playlist names absolute paths, which the demuxer refuses to
+        # follow unless unsafe filenames are allowed.
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        list_path,
+    ]
+    if audio_source:
+        cmd += ["-i", audio_source]
+    cmd += ["-map", "0:v"]
+    if audio_source:
+        cmd += ["-map", "1:a?", "-c:a", "copy", "-shortest"]
+    cmd += ["-c:v", "copy", partial]
+
+    logger.info("concatenating %d parts into %s", len(parts), output)
+    run(cmd, capture=False)
+    partial.replace(output)
+    return output
+
+
 def build_encode_cmd(
     frames_dir: Path,
     output: Path,
