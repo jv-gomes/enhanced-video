@@ -85,6 +85,45 @@ def vfr_video() -> Path:
     )
 
 
+@pytest.fixture(scope="session")
+def keyframed_video() -> Path:
+    """4 seconds of 160x120 at 30 fps with a keyframe every half second.
+
+    Frequent keyframes are what let the chunk cut happen by stream copy, so
+    this is the fixture for the ordinary path through ``chunk.split``.
+    """
+    if not HAS_FFMPEG:
+        pytest.skip("ffmpeg/ffprobe not on PATH")
+    return _generate(
+        FIXTURE_DIR / "keyframed.mp4",
+        [
+            "-f", "lavfi", "-i", "testsrc=size=160x120:rate=30",
+            "-f", "lavfi", "-i", "sine=frequency=440",
+            "-t", "4",
+            "-c:v", "libx264", "-g", "15", "-c:a", "aac",
+        ],
+    )
+
+
+@pytest.fixture(scope="session")
+def longgop_video() -> Path:
+    """4 seconds of 160x120 whose only keyframe is the first one.
+
+    A stream-copy cut cannot land anywhere inside this file, so it is what
+    forces ``chunk.split`` down its lossless re-cut path.
+    """
+    if not HAS_FFMPEG:
+        pytest.skip("ffmpeg/ffprobe not on PATH")
+    return _generate(
+        FIXTURE_DIR / "longgop.mp4",
+        [
+            "-f", "lavfi", "-i", "testsrc=size=160x120:rate=30",
+            "-t", "4",
+            "-c:v", "libx264", "-g", "1000", "-sc_threshold", "0",
+        ],
+    )
+
+
 def write_stub(path: Path, body: str) -> Path:
     """Write an executable stand-in for an NCNN binary.
 
