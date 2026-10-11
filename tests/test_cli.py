@@ -366,3 +366,16 @@ def test_a_successful_run_leaves_no_record_behind(
     )
     assert code == cli.EXIT_OK
     assert list(work.glob("*/state.json")) == []
+
+
+def test_no_overlap_reaches_the_options():
+    parser = cli.build_parser()
+
+    assert cli.options_from_args(_resolved(parser, [])).overlap is True
+    assert cli.options_from_args(_resolved(parser, ["--no-overlap"])).overlap is False
+
+
+def _resolved(parser, argv: list[str]):
+    args = parser.parse_args(["clip.mp4", *argv])
+    cli.resolve_args(args)
+    return args

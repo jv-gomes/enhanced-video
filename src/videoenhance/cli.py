@@ -107,6 +107,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--no-overlap",
+        dest="overlap",
+        action="store_false",
+        help=(
+            "in chunked mode, wait for each part to be encoded before generating "
+            "the next; by default the GPU starts on the next chunk while the "
+            "previous one is encoded, which keeps two chunks of frames on disk"
+        ),
+    )
+    parser.add_argument(
         "--encoder",
         metavar="NAME",
         help=(
@@ -371,6 +381,7 @@ def options_from_args(args: argparse.Namespace) -> Options:
         cache_size=args.cache_size,
         blocks=args.blocks,
         block_margin=args.block_margin,
+        overlap=args.overlap,
     )
 
 
@@ -400,7 +411,7 @@ def describe_plan(
     if config_path is not None:
         lines.append(f"config:  {config_path}")
     if chunking(info, args.chunk):
-        lines.append(f"chunks:  {describe_chunks(info, args.chunk)}")
+        lines.append(f"chunks:  {describe_chunks(info, args.chunk, overlap=args.overlap)}")
     lines += [
         f"work:    {work.root}",
         f"disk:    {estimate.render()}",
@@ -634,7 +645,7 @@ def main(argv: list[str] | None = None) -> int:
     estimate = estimate_disk_usage(
         info.width,
         info.height,
-        chunk_frame_count(info, args.chunk) if chunked else info.nb_frames,
+        chunk_frame_count(info, args.chunk, overlap=args.overlap) if chunked else info.nb_frames,
         scale=args.scale,
         target_fps=args.fps,
         source_fps=info.fps,
