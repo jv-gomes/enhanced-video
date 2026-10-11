@@ -221,6 +221,12 @@ identical. With no repeats, +1%.
   reloads its model per invocation, so per-pair calls would likely cost more
   than they save. Needs two measurements first: the split of time between the
   two stages, and the model load cost per invocation.
+- **Dedup by block.** Reuse the upscaled blocks of a frame that only partly
+  changed, hashing each block with a margin of its neighbours so the stitched
+  frame has no seams. The margins are paid on every block, so it only wins on
+  footage with large static regions. `scripts/measure_tile_reuse.py` measures
+  both halves of that on a given video — the GPU work per grid, and the PSNR of
+  a stitched frame per margin — and should decide it before any code is written.
 - **Scene-cut detection:** use FFmpeg's `scdet` filter to find hard cuts and
   duplicate the frame there instead of interpolating, avoiding RIFE's ghost
   frames.

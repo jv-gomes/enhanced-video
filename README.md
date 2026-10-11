@@ -115,6 +115,42 @@ Frames generated for one chunk are kept for the next, under a ceiling set by
 no limit the cache would grow with the length of the video and undo the point of
 processing in chunks.
 
+#### Would reusing blocks of a frame save more?
+
+Not built yet, but measurable. When only part of the picture moves — a mouth
+over a static background — no frame repeats as a whole, yet most of it does.
+Splitting frames into a grid and upscaling only the blocks not seen before
+would catch that, at a price: each block has to be upscaled with a margin of
+its neighbours, or the stitched frame shows seams, and those margins are paid
+again on every block. Whether it wins depends on the footage, so measure first:
+
+```bash
+# FFmpeg only: GPU work for each grid, against today's whole-frame dedup
+python scripts/measure_tile_reuse.py input.mp4 --grid 3 4 6 --duration 60
+
+# also upscale one frame whole and as blocks, and compare the two
+python scripts/measure_tile_reuse.py input.mp4 --grid 3 --seam-test
+```
+
+On the test fixture `tests/fixtures/held.mp4`, ten drawings held three frames
+each at 320x240, it prints:
+
+```
+strategy                     GPU work  vs none  vs today
+no dedup                       30.0 f     100%
+whole frames (today)           10.0 f      33%         -
+3x3 blocks, margin 16          10.3 f      34%       +3%
+4x4 blocks, margin 16           7.2 f      24%      -28%
+```
+
+GPU work is upscaled area counted in frames. A grid can lose to whole frames,
+as 3x3 does here: on a frame this small, a 16-pixel margin more than doubles
+the area of a block.
+
+The seam test reports PSNR against the whole-frame upscale for margins 0, 8, 16
+and 32, and writes each stitched frame next to a brightened difference image in
+`work/tile-test/`, where a seam shows as lines along the block edges.
+
 ### Limiting how hard the GPU works
 
 ```bash
