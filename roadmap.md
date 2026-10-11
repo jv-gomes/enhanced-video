@@ -142,7 +142,7 @@ and disk usage problems surface, so it comes before the GPU steps.
       OS and where the model folders go.
 - [ ] `docs: add troubleshooting for VRAM and audio sync` — the pitfalls from
       CLAUDE.md, written as symptom to fix.
-- [ ] `chore: add scripts/fetch-bins.sh` — optional helper that downloads and
+- [x] `chore: add scripts/fetch-bins.sh` — optional helper that downloads and
       unpacks the NCNN releases into `bin/`.
 - [ ] `chore(ci): add lint and test workflow` — run `ruff` and `pytest` on
       push, without a GPU.

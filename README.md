@@ -66,6 +66,12 @@ Pick the zip for your OS:
 (macOS builds exist, but this project is developed and tested on Linux with an
 AMD card.)
 
+On Linux, macOS and Git Bash, `scripts/fetch-bins.sh` does all of this: it picks the
+zip for your OS, fetches both releases, puts each into its folder with the right layout
+and keeps only `rife-v4.6`. `--dry-run` shows what it would download first, `--only
+realesrgan` or `--only rife` fetches one, `--all-rife-models` keeps the rest, and
+`--force` fetches again over an existing install. The manual steps follow.
+
 Two things catch people out:
 
 - **Download Real-ESRGAN from `xinntao/Real-ESRGAN`, not from
