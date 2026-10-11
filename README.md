@@ -137,6 +137,29 @@ to see what a setting costs.
 The audio is muxed once, at the end, from the original file — never per part,
 which is what would let the sound drift away from the picture over a long video.
 
+#### Encoding while the next chunk is generated
+
+Encoding a part needs no GPU compute, so by default it runs beside the next
+chunk: while FFmpeg encodes part N, the GPU is already upscaling and
+interpolating chunk N+1, instead of idling through every encode. The parts are
+still encoded one at a time and in order, so they all come out of the same
+encoder and can be joined.
+
+The cost is disk: two chunks' frames exist at once, one being encoded and one
+being generated, and the estimate in the plan counts both. `--no-overlap` goes
+back to one chunk at a time when space is tight.
+
+How much it saves is however long the encodes take, since that is what it
+hides. On the development machine, 10 seconds of 960x540 upscaled 2x to 60 fps
+in 2-second chunks went from 89.2 s to 83.4 s with `libx265` and from 82.6 s to
+81.0 s with `hevc_vaapi`: the GPU stages dominate there, and encoding the whole
+1080p60 result with `libx265` takes about 6 seconds, most of which the overlap
+hid. A slower encoder or a larger output gives it more to hide.
+
+Ctrl-C still stops both at once: the encode in flight is killed rather than
+retried with the next encoder, and the parts already finished are kept for
+`--resume`.
+
 ### Reusing repeated frames
 
 Real-ESRGAN is deterministic, so a frame whose pixels are identical to one it has

@@ -75,6 +75,13 @@ load-bearing:
   audible drift; the audio is muxed a single time, at the concatenation.
 - **Pin the encoder** to whatever the first part used, since the parts are
   joined by stream copy and the encoder chain may fall back at run time.
+- **Encode in one thread, in order.** By default (`Options.overlap`) part N is
+  encoded in a thread while the GPU generates chunk N+1 into the other of two
+  scratch slots (`current/`, `current-1/`). A slot is generated into only once
+  the part that last used it is encoded, and the pin is read when an encode
+  starts, not when it is queued. Stopping goes through `process.cancel_all()`,
+  which makes `run()` raise `Cancelled` — not a `ToolError` — so the encoder
+  fallback chain never answers a Ctrl-C by starting the next encoder.
 
 Every run records itself in `work/<job>/state.json` (`state.py`), which is what
 `--jobs` lists and `--resume <id>` continues. The rule for that file: **it holds

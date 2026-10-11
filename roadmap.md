@@ -480,6 +480,29 @@ size, which is why it is off by default.
 - **Scope:** do not change the default (`blocks = 1`), the M9 slot names, or
   `pixel_hashes`.
 
+## M11 — Encode while the GPU generates
+
+Goal: stop the GPU idling while each part is encoded. Asked for after M10: the
+GPU stages and the encode use different parts of the machine, so a chunked run
+can encode part N while chunk N+1 is generated. Recorded after the fact.
+
+- [x] `feat(process): cancel commands from another thread` — `cancel_all()`,
+      which terminates every child `run()` started and makes it raise
+      `Cancelled` instead of `ToolError`, so a fallback chain does not take a
+      stopped tool for a broken one.
+- [x] `refactor(pipeline): split run_pipeline into generate and finish` — the
+      GPU half and the encode half, so the second can run beside the next first.
+- [x] `feat(chunk): encode one chunk while the next is generated` — a single
+      encode thread taking parts in order, two scratch slots, failures raised at
+      the next chunk boundary, the pin read when an encode starts.
+- [x] `feat(cli): add --no-overlap` — the estimate and the plan count two chunks
+      when overlapping.
+
+Measured on 10 s of 960x540 at 2x/60 fps in 2-second chunks: 89.2 s to 83.4 s
+with `libx265`, 82.6 s to 81.0 s with `hevc_vaapi`, identical output. The ceiling
+is the encode time, about 6 s for the whole result with `libx265` here, since
+the GPU stages dominate on this machine.
+
 ## Backlog / future
 
 - **Dedup for RIFE.** Interpolation reuses nothing yet. The unit there is the
@@ -493,4 +516,7 @@ size, which is why it is off by default.
 - **Optional ROCm path:** only if explicitly requested, and only on Linux with
   a ROCm-supported card.
 - **Batch mode:** accept a directory of videos and process them in sequence.
+- **Extract ahead too.** M11 overlaps the encode with the GPU, but the
+  extraction of chunk N+1 still waits for the GPU to finish chunk N. It is
+  CPU work as well and could run a chunk ahead, at the cost of a third slot.
 - **HDR / 10-bit handling:** currently out of scope; PNG frames are 8-bit.
