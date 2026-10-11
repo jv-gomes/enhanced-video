@@ -25,7 +25,10 @@ FAIL = "fail"
 
 _MARKS = {OK: "[ ok ]", WARN: "[warn]", FAIL: "[fail]"}
 
-REALESRGAN_URL = "https://github.com/xinntao/Real-ESRGAN-ncnn-vulkan/releases"
+#: The release that ships the binary *with* its models folder. The releases of
+#: the Real-ESRGAN-ncnn-vulkan repository carry the binary alone, so unpacking
+#: one leaves the "missing models" check failing.
+REALESRGAN_URL = "https://github.com/xinntao/Real-ESRGAN/releases/tag/v0.2.5.0"
 RIFE_URL = "https://github.com/nihui/rife-ncnn-vulkan/releases"
 
 
