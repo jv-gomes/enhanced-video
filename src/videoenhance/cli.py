@@ -114,6 +114,27 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--no-dedup",
+        dest="dedup",
+        action="store_false",
+        help=(
+            "upscale every frame, even ones whose pixels are identical to a frame "
+            "already generated; repeats are reused by default, which is lossless "
+            "because Real-ESRGAN is deterministic"
+        ),
+    )
+    parser.add_argument(
+        "--cache-size",
+        type=parse_size,
+        metavar="BYTES",
+        default=config.DEFAULT_CACHE_SIZE,
+        help=(
+            "ceiling for the cache of upscaled frames that is shared between "
+            "chunks, accepting suffixes like 512M or 4G; 0 means no ceiling "
+            f"(default: {config.DEFAULT_CACHE_SIZE // 1024**3}G)"
+        ),
+    )
+    parser.add_argument(
         "--tile",
         type=int,
         default=config.DEFAULT_TILE_SIZE,
@@ -239,6 +260,30 @@ def apply_job(args: argparse.Namespace, job: state.Job) -> None:
             setattr(args, reverse[option], value)
 
 
+#: Suffixes accepted by --cache-size, so a ceiling can be written the way
+#: people say it rather than in bytes.
+SIZE_UNITS = {"k": 1024, "m": 1024**2, "g": 1024**3, "t": 1024**4}
+
+
+def parse_size(text: str) -> int:
+    """Parse a byte count that may carry a K/M/G/T suffix."""
+    cleaned = text.strip().lower().rstrip("b")
+    if cleaned and cleaned[-1] in SIZE_UNITS:
+        number, unit = cleaned[:-1], SIZE_UNITS[cleaned[-1]]
+    else:
+        number, unit = cleaned, 1
+    try:
+        value = float(number)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"{text!r} is not a size; write it as a number of bytes or with a "
+            "suffix, like 512M or 4G"
+        ) from exc
+    if value < 0:
+        raise argparse.ArgumentTypeError("a size cannot be negative")
+    return int(value * unit)
+
+
 def options_from_args(args: argparse.Namespace) -> Options:
     """Translate the parsed arguments into the pipeline's own options."""
     return Options(
@@ -253,6 +298,8 @@ def options_from_args(args: argparse.Namespace) -> Options:
         keep_temp=args.keep_temp,
         chunk_seconds=args.chunk,
         prefer_encoder=args.encoder,
+        dedup=args.dedup,
+        cache_size=args.cache_size,
     )
 
 

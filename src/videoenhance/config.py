@@ -46,6 +46,16 @@ DEFAULT_SCALE = 2
 DEFAULT_TARGET_FPS = 60
 DEFAULT_FRAME_FORMAT = "png"
 
+#: Reuse an upscaled frame whenever the same pixels come round again. Lossless
+#: for the output, because Real-ESRGAN is deterministic, and worth a lot on cel
+#: animation, where a drawing is held for two or three frames. Grainy live
+#: action has almost no exact repeats and simply pays the hashing cost.
+DEFAULT_DEDUP = True
+#: Ceiling for the upscaled-frame cache that outlives each chunk, in bytes.
+#: Without one, a long video's unique frames would accumulate for the whole run
+#: and undo the point of processing in chunks. 0 means no ceiling.
+DEFAULT_CACHE_SIZE = 2 * 1024**3
+
 #: Seconds of video processed per chunk. The frames of one chunk are the whole
 #: disk cost of a run, so this is what keeps a two-hour film from needing
 #: hundreds of gigabytes of scratch space. 0 disables chunking and processes

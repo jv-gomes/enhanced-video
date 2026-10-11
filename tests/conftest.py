@@ -124,6 +124,51 @@ def longgop_video() -> Path:
     )
 
 
+#: Grey levels for the held-frame fixture's drawings.
+HELD_DRAWINGS = 10
+#: How many frames each drawing occupies, i.e. animation "on threes".
+HELD_FOR = 3
+
+
+@pytest.fixture(scope="session")
+def held_video() -> Path:
+    """30 frames of flat colour, each of 10 drawings held for three frames.
+
+    This is the shape of cel animation, and the shape matters to what it is
+    testing. Held frames of flat artwork survive a lossy encode bit for bit —
+    the encoder has nothing to code, emits skip, and the decoder reproduces the
+    previous frame exactly — so the duplicates are still duplicates by the time
+    the pipeline hashes them. Held frames of dense or noisy artwork do not
+    survive, which is why the ``testsrc`` fixtures are the wrong tool here and
+    would quietly measure a 0% saving.
+    """
+    if not HAS_FFMPEG:
+        pytest.skip("ffmpeg/ffprobe not on PATH")
+    target = FIXTURE_DIR / "held.mp4"
+    if target.exists():
+        return target
+
+    FIXTURE_DIR.mkdir(parents=True, exist_ok=True)
+    stills = FIXTURE_DIR / "held-stills"
+    stills.mkdir(exist_ok=True)
+    for index in range(HELD_DRAWINGS):
+        level = 0x18 * index
+        _generate(
+            stills / f"{index:04d}.png",
+            ["-f", "lavfi", "-i", f"color=c=0x{level:02x}{level:02x}{level:02x}:s=160x120",
+             "-frames:v", "1"],
+        )
+    # Lossless at the drawing rate, then held to three times that rate.
+    source = _generate(
+        FIXTURE_DIR / "held-source.mp4",
+        ["-framerate", "10", "-i", str(stills / "%04d.png"), "-c:v", "libx264", "-qp", "0"],
+    )
+    return _generate(
+        target,
+        ["-i", str(source), "-vf", f"fps={10 * HELD_FOR}", "-c:v", "libx264", "-crf", "20"],
+    )
+
+
 def write_stub(path: Path, body: str) -> Path:
     """Write an executable stand-in for an NCNN binary.
 

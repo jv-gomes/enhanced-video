@@ -69,7 +69,15 @@ def test_interpolate_first_runs_rife_on_the_source_frames(
     result = run_pipeline(
         sample_video,
         tmp_path / "out.mp4",
-        Options(scale=2, target_fps=60, order="interpolate-first", keep_temp=True),
+        Options(
+            scale=2,
+            target_fps=60,
+            order="interpolate-first",
+            keep_temp=True,
+            # Without dedup, Real-ESRGAN is handed the stage directory itself,
+            # which is what this test is reading.
+            dedup=False,
+        ),
         work=work,
     )
     assert stage_names(result) == ["extract", "interpolate", "upscale"]
@@ -192,6 +200,27 @@ def test_a_half_finished_stage_is_run_again(sample_video: Path, tmp_path: Path, 
     assert stages["extract"].skipped is True
     assert stages["upscale"].skipped is False
     assert stages["interpolate"].skipped is True
+    assert len(list(work.frames_up.glob("*.png"))) == len(upscaled)
+    # The stage ran again, but every frame it needed was already in the cache
+    # from the first run, so it did not have to touch the GPU to finish.
+    assert len(ncnn_stubs.log.read_text().splitlines()) == before
+
+
+@requires_ffmpeg
+def test_a_half_finished_stage_without_dedup_calls_the_binary_again(
+    sample_video: Path, tmp_path: Path, ncnn_stubs
+):
+    """The same case with no cache to fall back on: the work is redone."""
+    work = pipeline.WorkDir.for_input(sample_video, base=tmp_path / "work")
+    options = Options(scale=2, target_fps=60, keep_temp=True, dedup=False)
+    run_pipeline(sample_video, tmp_path / "first.mp4", options, work=work)
+
+    upscaled = sorted(work.frames_up.glob("*.png"))
+    for frame in upscaled[len(upscaled) // 2 :]:
+        frame.unlink()
+    before = len(ncnn_stubs.log.read_text().splitlines())
+
+    run_pipeline(sample_video, tmp_path / "second.mp4", options, work=work)
     assert len(ncnn_stubs.log.read_text().splitlines()) == before + 1
     assert len(list(work.frames_up.glob("*.png"))) == len(upscaled)
 

@@ -77,6 +77,44 @@ to see what a setting costs.
 The audio is muxed once, at the end, from the original file — never per part,
 which is what would let the sound drift away from the picture over a long video.
 
+### Reusing repeated frames
+
+Real-ESRGAN is deterministic, so a frame whose pixels are identical to one it has
+already upscaled does not need upscaling again. Each frame is hashed, the
+distinct ones go to the GPU, and the repeats are hard-linked to the result. This
+is on by default and lossless — `--no-dedup` turns it off.
+
+Measured on a 90-second 640x360 clip upscaled 2x to 60 fps, with each drawing
+held for three frames:
+
+| | without | with |
+|---|---|---|
+| total run | 3 min 45 s | **2 min 32 s** |
+| upscale work | 2700 frames | **900 frames** |
+| `frames_up/` on disk | 36 MB | **12 MB** |
+
+All 5398 output frames came out bit-identical. On a clip with no repeated frames
+the cost is the hashing pass alone: 4 min 12 s became 4 min 15 s, about 1%.
+
+**How much it saves depends on the source**, so the summary reports the real
+figure per run rather than promising one:
+
+```
+upscale: 1000 frames, 2x with realesr-animevideov3; 334 of 1000 frames generated (67% saved)
+```
+
+A held drawing only counts as a repeat if its pixels come back *identical*, and
+that survives a lossy encode for flat, uniform artwork but often not for line
+art or fine detail — B-frame prediction and per-frame rate decisions change the
+low bits. Sources where the repeats are certain to be there are lossless or
+intermediate files, and VFR recordings, whose CFR conversion duplicates frames
+losslessly. Run `--dry-run` on a short clip to see what your own files give.
+
+Frames generated for one chunk are kept for the next, under a ceiling set by
+`--cache-size` (2 GiB by default, `0` for no ceiling). The ceiling matters: with
+no limit the cache would grow with the length of the video and undo the point of
+processing in chunks.
+
 ### Stopping and continuing later
 
 An interrupted run keeps its work and writes down what it was doing, so you do

@@ -240,8 +240,11 @@ def test_frames_of_a_finished_chunk_are_gone_before_the_next_one(
         work=work,
     )
 
-    frames = list(work.root.rglob("*.png"))
+    # The cache is deliberately kept: it is what lets a later chunk reuse a
+    # frame this one generated. Everything else must be gone.
+    frames = [p for p in work.root.rglob("*.png") if work.cache not in p.parents]
     assert frames == []
+    assert list(work.current.rglob("*.png")) == []
     assert len(list(work.parts.glob("part_*.mkv"))) == 4
 
 

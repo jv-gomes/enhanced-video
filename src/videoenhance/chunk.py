@@ -334,7 +334,11 @@ def run_chunked(
     reused = 0
     fps = Fraction(options.target_fps).limit_denominator(100000)
 
-    per_chunk = replace(options, keep_temp=False, mux_audio=False)
+    # cache_dir points outside current/, so a frame generated for one chunk is
+    # still there when a later chunk asks for the same pixels.
+    per_chunk = replace(
+        options, keep_temp=False, mux_audio=False, cache_dir=options.cache_dir or work.cache
+    )
     for index, chunk in enumerate(plan.chunks):
         part = _part_path(work.parts, index)
         parts.append(part)

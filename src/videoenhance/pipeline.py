@@ -15,6 +15,7 @@ from pathlib import Path
 
 from . import config
 from .config import Binaries
+from .dedup import FrameCache, upscale_deduplicated
 from .encode import encode
 from .extract import extract
 from .interpolate import interpolate, is_needed, target_frame_count
@@ -88,6 +89,14 @@ class Options:
     #: Carry the source's audio into the output. Chunked mode turns this off
     #: for the individual parts and muxes the audio once, at the end.
     mux_audio: bool = True
+    #: Generate each distinct frame once, reusing the result for every repeat.
+    dedup: bool = config.DEFAULT_DEDUP
+    #: Ceiling in bytes for the cache of upscaled frames; 0 means no ceiling.
+    cache_size: int = config.DEFAULT_CACHE_SIZE
+    #: Where that cache lives. Chunked mode points it at the job's directory so
+    #: a frame generated for one chunk is still there for the next; left unset,
+    #: it goes in the work directory of the run itself.
+    cache_dir: Path | None = None
     #: Draw a progress bar per stage. The CLI turns this on for a terminal.
     progress: bool = False
     gpu: int = config.DEFAULT_GPU_ID
@@ -168,6 +177,17 @@ def _upscale_stage(
         logger.info("skipping upscale: scale is 1")
         return frames
 
+    shared = dict(
+        expected_frames=frames.count,
+        scale=options.scale,
+        model=options.model,
+        frame_format=options.frame_format,
+        gpu=options.gpu,
+        tile=options.tile,
+        threads=options.threads,
+        bins=bins,
+    )
+    stats = None
     with track(
         "upscale",
         work.frames_up,
@@ -175,21 +195,29 @@ def _upscale_stage(
         frame_format=options.frame_format,
         enabled=options.progress,
     ):
-        result = upscale(
-            frames.directory,
-            work.frames_up,
-            expected_frames=frames.count,
-            scale=options.scale,
-            model=options.model,
-            frame_format=options.frame_format,
-            gpu=options.gpu,
-            tile=options.tile,
-            threads=options.threads,
-            bins=bins,
-        )
+        if options.dedup:
+            cache = FrameCache(
+                options.cache_dir or work.cache,
+                model=options.model,
+                scale=options.scale,
+                tile=options.tile,
+                frame_format=options.frame_format,
+                budget=options.cache_size,
+            )
+            result, stats = upscale_deduplicated(
+                frames.directory,
+                work.frames_up,
+                scratch=work.dedup,
+                cache=cache,
+                **shared,
+            )
+        else:
+            result = upscale(frames.directory, work.frames_up, **shared)
     detail = f"{options.scale}x with {options.model}"
     if result.tile:
         detail += f", tile {result.tile}"
+    if stats is not None and stats.saved:
+        detail += f"; {stats.render()}"
     stages.append(Stage("upscale", result.frame_count, detail, result.skipped))
     return _Frames(
         directory=result.frames_dir,

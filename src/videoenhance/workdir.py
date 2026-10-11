@@ -28,6 +28,11 @@ CFR_NAME = "cfr.mkv"
 CHUNKS_NAME = "chunks"
 PARTS_NAME = "parts"
 CURRENT_NAME = "current"
+#: Upscaled frames kept by pixel hash. It sits beside current/ rather than
+#: inside it, so a frame generated for one chunk is still there for the next.
+CACHE_NAME = "cache"
+#: Scratch space for the deduplicated set a stage actually sends to the GPU.
+DEDUP_NAME = "dedup"
 #: Marker inside ``current/`` naming the chunk its frames belong to.
 CURRENT_MARKER = "chunk.txt"
 
@@ -167,6 +172,16 @@ class WorkDir:
     def parts(self) -> Path:
         """The encoded output of each chunk, awaiting concatenation."""
         return self.root / PARTS_NAME
+
+    @property
+    def cache(self) -> Path:
+        """Upscaled frames keyed by pixel hash, shared across chunks."""
+        return self.root / CACHE_NAME
+
+    @property
+    def dedup(self) -> Path:
+        """Scratch space for one stage's deduplicated input and output."""
+        return self.root / DEDUP_NAME
 
     @property
     def current(self) -> Path:

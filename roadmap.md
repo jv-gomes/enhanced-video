@@ -194,8 +194,33 @@ the count does not change with the scale.
 - [x] `test(state): cover the record, the lookup and the refusal` — including
       the regression test for the silent `--scale` change, in both modes.
 
+## M9 — Generate each frame once
+
+Goal: stop paying the GPU twice for the same pixels. The expensive stage is
+deterministic, so a repeated frame is repeated work.
+
+- [x] `feat(dedup): hash frames and upscale each one once` — `dedup.py` with
+      pixel hashes from `ffmpeg -f framemd5`, hard-linked duplicates, and a
+      cache keyed by hash plus the settings that change the pixels, wrapping
+      `upscale()` rather than replacing it so the VRAM retry still applies.
+- [x] `feat(cli): add --no-dedup and --cache-size` — on by default, with the
+      saving reported per run because it depends on the source, and a ceiling on
+      the cache so it cannot grow with the length of the video.
+- [x] `test(dedup): cover the hashing, the cache and the equivalence` —
+      including a flat-artwork fixture whose held frames survive a lossy encode,
+      and a run compared frame by frame against `--no-dedup`.
+
+Measured on 90 s of 640x360 at 2x/60 fps with each drawing held three frames:
+3 min 45 s to 2 min 32 s, `frames_up/` from 36 MB to 12 MB, every output frame
+identical. With no repeats, +1%.
+
 ## Backlog / future
 
+- **Dedup for RIFE.** Interpolation reuses nothing yet. The unit there is the
+  pair, not the frame, and `rife-ncnn-vulkan` takes a whole directory and
+  reloads its model per invocation, so per-pair calls would likely cost more
+  than they save. Needs two measurements first: the split of time between the
+  two stages, and the model load cost per invocation.
 - **Scene-cut detection:** use FFmpeg's `scdet` filter to find hard cuts and
   duplicate the frame there instead of interpolating, avoiding RIFE's ghost
   frames.

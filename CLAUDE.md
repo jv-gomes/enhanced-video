@@ -50,6 +50,7 @@ The user's machine has an **AMD graphics card**. This defines the entire stack:
 │   ├── encode.py             # frames + audio -> final video, concat of parts
 │   ├── pipeline.py           # orchestrates the steps and the work directory
 │   ├── chunk.py              # splits long videos, runs the pipeline per chunk
+│   ├── dedup.py              # pixel hashing, so each frame is generated once
 │   └── state.py              # the saved job: --jobs, --resume, --restart
 ├── tests/
 └── work/                     # temporary frames (gitignored)
@@ -84,6 +85,20 @@ frame counts (`stage_is_done`), and a frame count does not move when `--scale`
 or `--model` does, so without the check a job restarted at a different scale
 silently skips the upscale. `PIXEL_OPTIONS` in `state.py` is the list that may
 not change; anything not in it (`--gpu`, `--tile`, `--keep-temp`) may.
+
+Before the upscale, each frame is hashed and only the distinct ones are sent to
+the GPU (`dedup.py`); the repeats are hard-linked to the result, so
+`frames_up/` holds every frame but stores each distinct one once. It is lossless
+because Real-ESRGAN is deterministic, and it is why the cache key includes the
+tile size — tiling changes the result at the seams and the out-of-VRAM retry can
+lower it part-way through a run.
+
+The hash comes from `ffmpeg -f framemd5`, i.e. **decoded pixels, not file
+bytes**. Hashing PNG bytes would be hostage to the encoder: anything embedded
+per frame would make every frame look distinct and the optimisation would stop
+working silently. Keep it that way, and keep the saving reported per run — it
+depends on the source, since exact repeats survive a lossy encode for flat
+artwork but often not for line art.
 
 ### 1. Probe
 ```bash
