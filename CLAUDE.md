@@ -50,7 +50,9 @@ The user's machine has an **AMD graphics card**. This defines the entire stack:
 │   ├── encode.py             # frames + audio -> final video, concat of parts
 │   ├── pipeline.py           # orchestrates the steps and the work directory
 │   ├── chunk.py              # splits long videos, runs the pipeline per chunk
-│   ├── dedup.py              # pixel hashing, so each frame is generated once
+│   ├── dedup.py              # pixel hashing, so each frame (or block) is generated once
+│   ├── blocks.py             # grid geometry; FFmpeg passes that hash, crop and stitch blocks
+│   ├── configfile.py         # videoenhance.toml: where it is found, what it may say
 │   └── state.py              # the saved job: --jobs, --resume, --restart
 ├── tests/
 └── work/                     # temporary frames (gitignored)
@@ -84,7 +86,7 @@ Its real job is to refuse a resume whose options changed. The stage guards are
 frame counts (`stage_is_done`), and a frame count does not move when `--scale`
 or `--model` does, so without the check a job restarted at a different scale
 silently skips the upscale. `PIXEL_OPTIONS` in `state.py` is the list that may
-not change; anything not in it (`--gpu`, `--tile`, `--keep-temp`) may.
+not change; anything not in it (`--gpu`, `--tile`, `--gpu-load`, `--keep-temp`) may.
 
 Before the upscale, each frame is hashed and only the distinct ones are sent to
 the GPU (`dedup.py`); the repeats are hard-linked to the result, so
@@ -99,6 +101,29 @@ per frame would make every frame look distinct and the optimisation would stop
 working silently. Keep it that way, and keep the saving reported per run — it
 depends on the source, since exact repeats survive a lossy encode for flat
 artwork but often not for line art.
+
+`--blocks N` (off by default, set in `videoenhance.toml` or on the command line)
+takes the same idea below the frame: a frame that misses the cache is cut into an
+N x N grid and only the blocks not seen before are upscaled (`blocks.py`). Three
+rules there are load-bearing:
+
+- **Every frame goes through blocks, not only the changed ones.** A block
+  upscaled alone differs at its edges from the same pixels inside a whole frame,
+  so mixing stitched frames with whole ones flickers, while stitching throughout
+  makes a reused block bit for bit what recomputing it gives. This is also why
+  `blocks` and `block_margin` are in `PIXEL_OPTIONS`.
+- **Blocks are PNG whatever `--frame-format` says.** A block is cropped,
+  upscaled, cropped and stitched, and JPEG would add loss at each step; only the
+  stitched frame is written in the requested format.
+- **Trim the caches only at the end of the stage, and together.** Frames and
+  blocks share one `--cache-size` budget, and a trim in the middle could delete a
+  block the stitching still needs.
+
+The key of a block is the hash of its pixels *with its margin*, plus its shape: a
+changed neighbour must redo the block or the join shows a seam, and a hash of raw
+bytes cannot tell 100x50 from 50x100. Measure before enabling it, with
+`scripts/measure_tile_reuse.py`: the margins can make a grid cost more than whole
+frames.
 
 ### 1. Probe
 ```bash

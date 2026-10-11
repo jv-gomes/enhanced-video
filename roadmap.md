@@ -299,7 +299,7 @@ measured over 60 dB.
 
 ### Tasks
 
-- [ ] `fix(dedup): cache frames under the tile that made them` — a
+- [x] `fix(dedup): cache frames under the tile that made them` — a
       pre-existing bug, fixed first because block mode inherits it.
       `FrameCache` is built with `options.tile`, but `upscale()` can lower the
       tile on a VRAM retry and return it as `result.tile`. The frames are then
@@ -312,7 +312,7 @@ measured over 60 dB.
       in `tests/test_upscale.py` that only succeeds at tile 128, run through
       `upscale_deduplicated`, must leave its frames in the `t128` slot and
       nothing in `t0`.
-- [ ] `refactor(blocks): move the block geometry into the package` — new
+- [x] `refactor(blocks): move the block geometry into the package` — new
       `src/videoenhance/blocks.py` holding `Tile` and `grid_tiles()` from the
       script, plus three FFmpeg helpers that take a list of FFmpeg *input
       arguments*, so that the same code serves a video window
@@ -330,7 +330,7 @@ measured over 60 dB.
       `tests/test_blocks.py`, and add one for a sequence: crop 5 frames,
       stitch at scale 1, every frame back with PSNR `inf`. The script's output
       must not change.
-- [ ] `feat(config): read options from videoenhance.toml` — new
+- [x] `feat(config): read options from videoenhance.toml` — new
       `src/videoenhance/configfile.py`. Lookup order: `--config PATH` (an
       error if missing), then `$VIDEOENHANCE_CONFIG`, then
       `PROJECT_ROOT / "videoenhance.toml"` if it exists, else no file. Parse
@@ -354,7 +354,7 @@ measured over 60 dB.
       the comments above and gitignore `videoenhance.toml`, which is personal.
       Tests use `tmp_path` files and `monkeypatch` for the variable and for
       `config.PROJECT_ROOT`.
-- [ ] `feat(state): record blocks and margin as pixel options` — add
+- [x] `feat(state): record blocks and margin as pixel options` — add
       `blocks` and `block_margin` to `PIXEL_OPTIONS` and `OPTION_FLAGS`
       (`--blocks`, `--block-margin`). Two rules make the comparison honest:
       - **Normalise:** `options_of()` records `block_margin = 0` whenever
@@ -369,7 +369,7 @@ measured over 60 dB.
 
       Tests: an old record without the keys refuses `blocks=3` and accepts
       `blocks=1`; with `blocks=1` the margin is free to change.
-- [ ] `feat(dedup): upscale only the blocks that changed` — the algorithm
+- [x] `feat(dedup): upscale only the blocks that changed` — the algorithm
       above, as a block branch inside `upscale_deduplicated`, which gains
       `blocks: int = 1` and `margin: int = 0` parameters. `blocks == 1` must
       take the existing code path untouched. Other changes:
@@ -405,7 +405,7 @@ measured over 60 dB.
       test: a second run of the same frames sends nothing to the stub and
       gives identical frames; `frame_format="jpg"` still upscales PNG blocks
       (assert on the stub's `-f`); `blocks=1` runs the M9 path byte for byte.
-- [ ] `feat(cli): add --config, --blocks and --block-margin` — `--blocks`
+- [x] `feat(cli): add --config, --blocks and --block-margin` — `--blocks`
       and `--block-margin` join `RESOLVED_ARGS` and `ARG_TO_OPTION`, with
       defaults 1 and 16 in `config.py` (`DEFAULT_BLOCKS`,
       `DEFAULT_BLOCK_MARGIN`). Precedence: typed flag > recorded job (on
@@ -430,7 +430,7 @@ measured over 60 dB.
 
       Test the precedence chain, the resume after a config edit, and the
       validation messages.
-- [ ] `docs: document block dedup and the config file` — the README gets a
+- [x] `docs: document block dedup and the config file` — the README gets a
       section on `videoenhance.toml`, and turns "Would reusing blocks of a
       frame save more?" into how to measure, then enable it. CLAUDE.md gets
       `blocks.py` and `configfile.py` in the structure, and the three rules
@@ -439,6 +439,28 @@ measured over 60 dB.
       clip at 3x3 and 4x4 against
       `blocks = 1`, for wall time and GPU work, and record the figures under
       this milestone, as M9 did.
+
+### Results
+
+Measured on a synthetic clip, not on anime: 10 s of 960x540 at 30 fps, a
+spatially varying background and one 60x60 box crossing the top of the picture,
+encoded losslessly so that nothing but the box differs between frames and all
+300 are distinct. `--scale 2 --fps 30 --chunk 0 --block-margin 16`, on the AMD
+card, wall time of the whole run:
+
+| | upscale | wall time |
+|---|---|---|
+| whole frames (`--blocks 1`) | 300 frames | 36.8 s |
+| 3x3 | 392 of 2700 blocks, 51.0 frames of work | **23.7 s** (-36%) |
+| 4x4 | 796 of 4800 blocks, 65.3 frames of work | 28.4 s (-23%) |
+
+A clip with a static background is the case blocks are for, so this is close to
+a best case, and 3x3 beat 4x4 because the margins grow faster than the
+saving. A real anime clip has not been measured here and is the first thing to
+do before turning it on: `scripts/measure_tile_reuse.py` does that without a
+GPU. On `tests/fixtures/held.mp4` the same script says 3x3 loses to whole frames
+(+3%) and 4x4 wins (-28%), so the answer depends on the footage and the frame
+size, which is why it is off by default.
 
 ### Notes for the implementer
 

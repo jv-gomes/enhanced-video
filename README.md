@@ -115,25 +115,27 @@ Frames generated for one chunk are kept for the next, under a ceiling set by
 no limit the cache would grow with the length of the video and undo the point of
 processing in chunks.
 
-#### Would reusing blocks of a frame save more?
+#### Reusing parts of a frame: `--blocks`
 
-Not built yet, but measurable. When only part of the picture moves — a mouth
-over a static background — no frame repeats as a whole, yet most of it does.
-Splitting frames into a grid and upscaling only the blocks not seen before
-would catch that, at a price: each block has to be upscaled with a margin of
-its neighbours, or the stitched frame shows seams, and those margins are paid
-again on every block. Whether it wins depends on the footage, so measure first:
+When only part of the picture moves — a mouth over a static background — no frame
+repeats as a whole, yet most of it does. `--blocks N` splits every frame that is
+not a repeat into an N x N grid and upscales only the blocks it has not seen
+before. It is **off by default**, because it can cost more than it saves.
+
+The reason is the margin. Real-ESRGAN's output at a pixel depends on its
+neighbours, so a block upscaled alone differs at its edges from the same pixels
+inside the whole frame. Each block is therefore upscaled with a margin of its
+neighbours (`--block-margin`, 16 px by default) and the margin is cut off
+afterwards; and a block is reused only if its margin is identical too. That
+margin is paid again on every block, including on a frame that changes
+everywhere, which is how a grid ends up doing *more* GPU work than whole frames
+on footage with nothing static in it.
+
+**Measure first.** This reads your video with FFmpeg alone and needs no GPU:
 
 ```bash
-# FFmpeg only: GPU work for each grid, against today's whole-frame dedup
 python scripts/measure_tile_reuse.py input.mp4 --grid 3 4 6 --duration 60
-
-# also upscale one frame whole and as blocks, and compare the two
-python scripts/measure_tile_reuse.py input.mp4 --grid 3 --seam-test
 ```
-
-On the test fixture `tests/fixtures/held.mp4`, ten drawings held three frames
-each at 320x240, it prints:
 
 ```
 strategy                     GPU work  vs none  vs today
@@ -143,13 +145,52 @@ whole frames (today)           10.0 f      33%         -
 4x4 blocks, margin 16           7.2 f      24%      -28%
 ```
 
-GPU work is upscaled area counted in frames. A grid can lose to whole frames,
-as 3x3 does here: on a frame this small, a 16-pixel margin more than doubles
-the area of a block.
+GPU work is upscaled area counted in frames; "vs today" below zero means less
+work than the whole-frame dedup you already have. (That is
+`tests/fixtures/held.mp4`, ten drawings held three frames each at 160x120: on a
+frame that small a 16 px margin more than doubles a block, and 3x3 loses.) To see
+what a margin does to the picture, add `--seam-test`, which upscales one frame
+whole and as blocks and reports the PSNR for margins 0, 8, 16 and 32, with a
+brightened difference image in `work/tile-test/`. On the fixture it read 47.7 dB
+with no margin, with a visible line along every block edge, and over 60 dB from 8.
 
-The seam test reports PSNR against the whole-frame upscale for margins 0, 8, 16
-and 32, and writes each stitched frame next to a brightened difference image in
-`work/tile-test/`, where a seam shows as lines along the block edges.
+Then turn it on:
+
+```bash
+python -m videoenhance.cli input.mp4 --blocks 3 --block-margin 16
+```
+
+Every frame that reaches the GPU goes through blocks, the unchanged ones
+included, because a frame upscaled whole next to one stitched from blocks would
+shift slightly and flicker. The output is therefore very slightly different from
+`--blocks 1` — about 59 dB against it at margin 16 — and the setting is one that
+`--resume` refuses to change. The summary reports the real figure per run:
+
+```
+upscale: 300 frames, 2x with realesr-animevideov3; 3x3 blocks: 392 of 2700 generated, 51.0 frames of work for 300 (83% saved)
+```
+
+A grid whose blocks would be under 32 px on a side is refused, and a margin under
+8 px, or a grid that would cost more than 50% extra on a frame that changes
+everywhere, gets a warning. `--no-dedup` turns blocks off with a note.
+
+#### The config file
+
+The grid and the margin can live in `videoenhance.toml` instead of the command
+line. Copy `videoenhance.example.toml`, which says what each setting means:
+
+```toml
+[dedup]
+blocks = 3     # per side; 1 = whole frames only (default)
+margin = 16    # pixels of neighbours upscaled with each block
+```
+
+It is looked for in this order: `--config PATH`, `$VIDEOENHANCE_CONFIG`, then
+`videoenhance.toml` in the project root; having none is fine. A typed flag wins
+over the file, and on `--resume` the recorded job wins over it, so editing the file
+never makes a half-finished job refuse to continue. An unknown key is an error
+that names it, since a typo that did nothing would leave you waiting for a saving.
+Reading TOML needs Python 3.11, or `pip install tomli` on 3.10.
 
 ### Limiting how hard the GPU works
 
