@@ -1,0 +1,12 @@
+# Copy this to videoenhance.toml (which is not committed) to change the
+# defaults. Anything typed on the command line wins over this file.
+
+[dedup]
+# Blocks per side. 1 = whole frames only (default); 3 = a 3x3 grid.
+# More blocks catch smaller moving regions but pay more for margins, so
+# measure first: scripts/measure_tile_reuse.py input.mp4 --grid 3 4 6
+blocks = 3
+
+# Pixels of neighbours upscaled with each block, so stitching leaves no
+# seams. Measure with: scripts/measure_tile_reuse.py input.mp4 --seam-test
+margin = 16

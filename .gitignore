@@ -27,3 +27,6 @@ venv/
 .vscode/
 .idea/
 .DS_Store
+
+# Personal settings; videoenhance.example.toml is the committed template
+videoenhance.toml
