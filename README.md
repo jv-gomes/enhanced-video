@@ -115,6 +115,17 @@ Frames generated for one chunk are kept for the next, under a ceiling set by
 no limit the cache would grow with the length of the video and undo the point of
 processing in chunks.
 
+### Limiting how hard the GPU works
+
+```bash
+python -m videoenhance.cli input.mp4 --gpu-load 50
+```
+
+`--gpu-load` takes 1-100 (default 100). The NCNN tools have no throttle of their
+own, so the process is suspended for the rest of each half-second cycle: at 50
+the card works half the time and idles the other half. Output is identical;
+only the run takes longer, in return for a cooler and quieter card.
+
 ### Stopping and continuing later
 
 An interrupted run keeps its work and writes down what it was doing, so you do
@@ -149,7 +160,7 @@ Use --restart to throw that away and start over, or run with the original option
 ```
 
 `--restart` discards the saved work and begins again. Settings that do not
-change the pixels — `--gpu`, `--tile`, `--keep-temp` — are free to differ.
+change the pixels — `--gpu`, `--tile`, `--gpu-load`, `--keep-temp` — are free to differ.
 
 ## Development
 

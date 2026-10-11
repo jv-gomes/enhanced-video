@@ -102,6 +102,9 @@ class Options:
     gpu: int = config.DEFAULT_GPU_ID
     tile: int = config.DEFAULT_TILE_SIZE
     threads: str = config.DEFAULT_THREADS
+    #: Percent of the time the GPU tools may run; below 100 they are paused
+    #: in between so the card is not saturated.
+    load: int = config.DEFAULT_GPU_LOAD
     keep_temp: bool = False
     allow_hardware: bool = True
     prefer_encoder: str | None = None
@@ -185,6 +188,7 @@ def _upscale_stage(
         gpu=options.gpu,
         tile=options.tile,
         threads=options.threads,
+        load=options.load,
         bins=bins,
     )
     stats = None
@@ -266,6 +270,7 @@ def _interpolate_stage(
             frame_format=options.frame_format,
             gpu=options.gpu,
             threads=options.threads,
+            load=options.load,
             width=frames.width,
             height=frames.height,
             bins=bins,

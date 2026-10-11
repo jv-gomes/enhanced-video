@@ -59,6 +59,16 @@ def test_options_carry_every_processing_argument():
     assert options.keep_temp is True
 
 
+def test_gpu_load_reaches_the_options_and_is_validated():
+    parser = cli.build_parser()
+    args = parser.parse_args(["clip.mp4", "--gpu-load", "40"])
+    assert cli.options_from_args(args).load == 40
+    for bad in ("0", "101"):
+        with pytest.raises(SystemExit) as excinfo:
+            parser.parse_args(["clip.mp4", "--gpu-load", bad])
+        assert excinfo.value.code == 2
+
+
 @requires_ffmpeg
 def test_a_missing_binary_is_reported_and_the_frames_are_kept(
     sample_video: Path,

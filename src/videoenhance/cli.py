@@ -147,6 +147,17 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Vulkan device id (default: {config.DEFAULT_GPU_ID})",
     )
     parser.add_argument(
+        "--gpu-load",
+        type=parse_percent,
+        metavar="PERCENT",
+        default=config.DEFAULT_GPU_LOAD,
+        help=(
+            "how hard to work the GPU, 1-100: the upscaler and interpolator run "
+            "this share of the time and are paused for the rest, trading speed "
+            f"for a cooler, quieter card (default: {config.DEFAULT_GPU_LOAD})"
+        ),
+    )
+    parser.add_argument(
         "--work-dir",
         type=Path,
         default=config.WORK_DIR,
@@ -284,6 +295,17 @@ def parse_size(text: str) -> int:
     return int(value * unit)
 
 
+def parse_percent(text: str) -> int:
+    """Argparse type for a percentage between 1 and 100."""
+    try:
+        value = int(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a whole number") from exc
+    if not 1 <= value <= 100:
+        raise argparse.ArgumentTypeError("must be between 1 and 100")
+    return value
+
+
 def options_from_args(args: argparse.Namespace) -> Options:
     """Translate the parsed arguments into the pipeline's own options."""
     return Options(
@@ -295,6 +317,7 @@ def options_from_args(args: argparse.Namespace) -> Options:
         progress=args.progress and progress_wanted(),
         gpu=args.gpu,
         tile=args.tile,
+        load=args.gpu_load,
         keep_temp=args.keep_temp,
         chunk_seconds=args.chunk,
         prefer_encoder=args.encoder,

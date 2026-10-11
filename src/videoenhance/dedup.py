@@ -282,6 +282,7 @@ def upscale_deduplicated(
     gpu: int = config.DEFAULT_GPU_ID,
     tile: int = config.DEFAULT_TILE_SIZE,
     threads: str = config.DEFAULT_THREADS,
+    load: int = config.DEFAULT_GPU_LOAD,
     bins: Binaries | None = None,
     force: bool = False,
 ) -> tuple[UpscaleResult, DedupStats]:
@@ -345,6 +346,7 @@ def upscale_deduplicated(
             gpu=gpu,
             tile=tile,
             threads=threads,
+            load=load,
             bins=bins,
             force=True,
         )

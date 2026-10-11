@@ -9,8 +9,12 @@ made with ``shell=True``.
 from __future__ import annotations
 
 import logging
+import os
 import shutil
+import signal
 import subprocess
+import sys
+import threading
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 
@@ -69,6 +73,36 @@ def _tail(text: str, limit: int) -> list[str]:
     return lines[-limit:]
 
 
+def _set_suspended(proc: subprocess.Popen[str], suspended: bool) -> None:
+    """Pause or resume ``proc``, ignoring a process that has already exited."""
+    try:
+        if sys.platform == "win32":
+            import ctypes
+
+            handle = ctypes.windll.kernel32.OpenProcess(0x0800, False, proc.pid)  # SUSPEND_RESUME
+            if handle:
+                fn = ctypes.windll.ntdll.NtSuspendProcess if suspended else ctypes.windll.ntdll.NtResumeProcess
+                fn(handle)
+                ctypes.windll.kernel32.CloseHandle(handle)
+        else:
+            os.kill(proc.pid, signal.SIGSTOP if suspended else signal.SIGCONT)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+
+
+def _throttle(proc: subprocess.Popen[str], load: int, stop: threading.Event) -> None:
+    """Let ``proc`` run ``load`` percent of the time by pausing it in between."""
+    from .config import THROTTLE_CYCLE
+
+    run_for = THROTTLE_CYCLE * load / 100
+    pause_for = THROTTLE_CYCLE - run_for
+    while not stop.wait(run_for):
+        _set_suspended(proc, True)
+        stop.wait(pause_for)
+        _set_suspended(proc, False)
+    _set_suspended(proc, False)
+
+
 def run(
     cmd: Sequence[object],
     *,
@@ -76,6 +110,7 @@ def run(
     check: bool = True,
     cwd: Path | None = None,
     timeout: float | None = None,
+    load: int = 100,
 ) -> subprocess.CompletedProcess[str]:
     """Run ``cmd`` and return the completed process.
 
@@ -88,6 +123,9 @@ def run(
         check: Raise :class:`ToolError` on a non-zero exit code.
         cwd: Working directory for the child process.
         timeout: Seconds to wait before killing the child.
+        load: Percent of the time the child may run, 1-100. Below 100 it is
+            suspended for the rest of each short cycle, which is how the GPU
+            tools are kept from saturating the card.
 
     Raises:
         MissingToolError: The executable does not exist.
@@ -98,17 +136,23 @@ def run(
     if not argv:
         raise ValueError("run() needs at least a program name")
 
+    if not 1 <= load <= 100:
+        raise ValueError("load must be between 1 and 100")
+
     logger.debug("running: %s", format_cmd(argv))
 
     try:
-        completed = subprocess.run(  # noqa: S603 - argv list, never shell=True
-            argv,
-            capture_output=capture,
-            text=True,
-            cwd=str(cwd) if cwd else None,
-            timeout=timeout,
-            check=False,
-        )
+        if load < 100:
+            completed = _run_throttled(argv, load, capture, cwd, timeout)
+        else:
+            completed = subprocess.run(  # noqa: S603 - argv list, never shell=True
+                argv,
+                capture_output=capture,
+                text=True,
+                cwd=str(cwd) if cwd else None,
+                timeout=timeout,
+                check=False,
+            )
     except FileNotFoundError as exc:
         raise MissingToolError(argv) from exc
     except subprocess.TimeoutExpired as exc:
@@ -120,6 +164,35 @@ def run(
         raise ToolError(argv, completed.returncode, completed.stderr or "")
 
     return completed
+
+
+def _run_throttled(
+    argv: list[str], load: int, capture: bool, cwd: Path | None, timeout: float | None
+) -> subprocess.CompletedProcess[str]:
+    pipe = subprocess.PIPE if capture else None
+    proc = subprocess.Popen(  # noqa: S603 - argv list, never shell=True
+        argv, stdout=pipe, stderr=pipe, text=True, cwd=str(cwd) if cwd else None
+    )
+    stop = threading.Event()
+    thread = threading.Thread(target=_throttle, args=(proc, load, stop), daemon=True)
+    thread.start()
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        stop.set()
+        thread.join()
+        proc.kill()
+        stdout, stderr = proc.communicate()
+        raise subprocess.TimeoutExpired(argv, timeout, output=stdout, stderr=stderr) from None
+    except BaseException:
+        stop.set()
+        thread.join()
+        proc.kill()
+        raise
+    finally:
+        stop.set()
+        thread.join()
+    return subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
 
 
 def which(program: str) -> Path | None:

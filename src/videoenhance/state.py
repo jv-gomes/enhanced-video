@@ -39,7 +39,7 @@ STATE_NAME = "state.json"
 STATE_VERSION = 1
 
 #: Options that change the pixels of the output, and therefore may not change
-#: between a run and its resume. ``gpu``, ``tile``, ``threads``, ``progress``
+#: between a run and its resume. ``gpu``, ``tile``, ``threads``, ``load``, ``progress``
 #: and ``keep_temp`` are deliberately absent: they change how the work is done,
 #: not what comes out, so resuming with different ones is legitimate.
 PIXEL_OPTIONS = (

@@ -71,6 +71,13 @@ DEFAULT_GPU_ID = 0
 DEFAULT_TILE_SIZE = 0
 #: Tile sizes to retry with when the GPU runs out of memory.
 TILE_FALLBACKS = (256, 128)
+#: Share of the time the GPU binaries are allowed to run, in percent. The
+#: NCNN tools have no throttle of their own, so ``process.run`` pauses the
+#: process for the rest of each cycle; 100 means no limit.
+DEFAULT_GPU_LOAD = 100
+#: Length of one run-then-pause cycle, in seconds. Short enough that the card
+#: visibly idles between bursts, long enough that suspending costs nothing.
+THROTTLE_CYCLE = 0.5
 #: ``-j``: load:proc:save thread counts.
 DEFAULT_THREADS = "1:2:2"
 

@@ -133,6 +133,7 @@ def interpolate(
     frame_format: str = config.DEFAULT_FRAME_FORMAT,
     gpu: int = config.DEFAULT_GPU_ID,
     threads: str = config.DEFAULT_THREADS,
+    load: int = config.DEFAULT_GPU_LOAD,
     uhd: bool | None = None,
     width: int = 0,
     height: int = 0,
@@ -220,6 +221,7 @@ def interpolate(
                 bins=bins,
             ),
             capture=True,
+            load=load,
         )
 
     try:

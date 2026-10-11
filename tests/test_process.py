@@ -68,3 +68,24 @@ def test_format_cmd_quotes_spaces():
 def test_which_finds_the_interpreter():
     assert which(Path(sys.executable).name) is not None
     assert which("videoenhance-does-not-exist") is None
+
+
+def test_throttled_run_is_slower_but_returns_the_same_result():
+    import time
+
+    code = "import time; t=time.process_time()\nwhile time.process_time()-t<0.6: pass\nprint('ok')"
+    start = time.monotonic()
+    result = run([sys.executable, "-c", code], load=50)
+    assert result.stdout.strip() == "ok"
+    assert time.monotonic() - start > 0.9
+
+
+def test_throttled_run_still_reports_failure():
+    with pytest.raises(ToolError):
+        run([sys.executable, "-c", "import sys; sys.exit(3)"], load=50)
+
+
+@pytest.mark.parametrize("load", [0, 101])
+def test_run_rejects_a_load_outside_1_to_100(load: int):
+    with pytest.raises(ValueError, match="load"):
+        run([sys.executable, "-c", "pass"], load=load)
