@@ -138,13 +138,13 @@ and disk usage problems surface, so it comes before the GPU steps.
 
 ## M6 — Docs, packaging & polish
 
-- [ ] `docs: document bin/ installation` — which release to download for each
+- [x] `docs: document bin/ installation` — which release to download for each
       OS and where the model folders go.
-- [ ] `docs: add troubleshooting for VRAM and audio sync` — the pitfalls from
+- [x] `docs: add troubleshooting for VRAM and audio sync` — the pitfalls from
       CLAUDE.md, written as symptom to fix.
 - [x] `chore: add scripts/fetch-bins.sh` — optional helper that downloads and
       unpacks the NCNN releases into `bin/`.
-- [ ] `chore(ci): add lint and test workflow` — run `ruff` and `pytest` on
+- [x] `chore(ci): add lint and test workflow` — run `ruff` and `pytest` on
       push, without a GPU.
 
 ## M7 — Chunked processing

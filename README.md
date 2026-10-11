@@ -410,7 +410,14 @@ is a Real-ESRGAN zip from the wrong repository, which has the executable and no 
 ## Development
 
 ```bash
+pip install -e ".[dev]"
+ruff check src tests scripts
 pytest -q
 ```
+
+The tests need FFmpeg and FFprobe, which build their own clips, and nothing else:
+no GPU, and no NCNN binaries, which are replaced by stand-ins. The same two
+commands run on every push and pull request in
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml), on Python 3.10 and 3.14.
 
 Project conventions and the full design live in [CLAUDE.md](CLAUDE.md).

@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # Pinned rather than "latest": the project uses ffmpeg's -fps_mode, which
+    # needs FFmpeg 5.1 or newer, and the apt package of the 22.04 image is 4.4.
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor the project promises, and the version it is developed on.
+        python-version: ["3.10", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      # The tests build their own clips with ffmpeg and read them back with
+      # ffprobe. No GPU is involved anywhere: the NCNN programs are replaced by
+      # stand-ins, and there is no render node, so the CPU encoders are used.
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          ffmpeg -version | head -n 1
+
+      - name: Install the package
+        run: python -m pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check src tests scripts
+
+      - name: Check the shell script parses
+        run: bash -n scripts/fetch-bins.sh
+
+      - name: Test
+        run: pytest -q
