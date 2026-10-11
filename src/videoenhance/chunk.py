@@ -21,12 +21,22 @@ Two details carry most of the correctness:
 * **The encoder is pinned** to whatever the first part used. The parts are
   concatenated by stream copy, which requires them to share a codec, and the
   encoder chain is allowed to fall back at run time.
+
+Encoding a part needs no GPU compute, so by default it runs in a thread beside
+the next chunk's generation (``Options.overlap``): while FFmpeg encodes part N
+the GPU is already working on chunk N+1, instead of sitting idle through every
+encode. Two scratch slots alternate for that, which puts a second chunk of
+frames on disk. The parts are still encoded one at a time and in order, by a
+single thread, which is what keeps the encoder pin working: part N+1 asks for
+whatever part N settled on.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, replace
+from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass, field, replace
 from fractions import Fraction
 from pathlib import Path
 
@@ -34,11 +44,12 @@ from . import config
 from .config import Binaries, binaries
 from .encode import concat
 from .extract import to_cfr
-from .pipeline import Options, Result, Stage, run_pipeline
+from .pipeline import Generated, Options, Result, Stage, finish, generate
 from .probe import ProbeError, VideoInfo, probe
-from .process import ToolError, run
+from .process import ToolError, cancel_all, reset_cancel, run
+from .progress import say
 from .state import Job, for_input, options_of, record_cut, record_encoder, save
-from .workdir import WorkDir, human_bytes
+from .workdir import SLOTS, WorkDir, human_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -282,6 +293,88 @@ def _joined_frame_count(output: Path, bins: Binaries | None = None) -> int:
         return 0
 
 
+@dataclass
+class _Tally:
+    """What the encoded parts add up to. Written only by the encode thread."""
+
+    pinned: str | None
+    job: Job
+    encoders: dict[str, int] = field(default_factory=dict)
+    frames: int = 0
+    fps: Fraction = Fraction(0)
+
+    def add(self, result: Result) -> None:
+        self.pinned = self.pinned or result.encoder
+        self.job = record_encoder(self.job, result.encoder)
+        self.encoders[result.encoder] = self.encoders.get(result.encoder, 0) + 1
+        self.frames += result.frames
+        self.fps = result.fps
+
+
+def _encode_in_order(
+    todo: list[int],
+    *,
+    generate_chunk: Callable[[int, int], Generated],
+    encode_chunk: Callable[[int, Generated], None],
+    overlap: bool,
+    announce: Callable[[int], None],
+) -> None:
+    """Generate each chunk in ``todo`` and encode it, overlapping when asked.
+
+    Without overlap this is the plain loop: generate, encode, next. With it, a
+    single encode thread takes each generated chunk in order while this thread
+    goes on to generate the next one into the other scratch slot. Three rules
+    keep that safe:
+
+    * A slot is reused only once the part that last used it is encoded, so the
+      encode thread never reads frames the GPU is overwriting.
+    * A failed encode stops the run before the next chunk is generated rather
+      than after the whole video: the error is raised from the encode thread at
+      the next chunk boundary.
+    * An interrupt stops everything at once. :func:`cancel_all` kills the encode
+      in flight and makes :func:`run` raise :class:`~videoenhance.process.
+      Cancelled` instead of :class:`ToolError`, so the encoder chain does not
+      take the dying FFmpeg for a broken encoder and start the next one.
+    """
+    if not overlap:
+        for index in todo:
+            announce(index)
+            encode_chunk(index, generate_chunk(index, 0))
+        return
+
+    pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="encode")
+    in_slot: dict[int, Future[None]] = {}
+    queued: list[Future[None]] = []
+    stopping = False
+    try:
+        for position, index in enumerate(todo):
+            slot = position % SLOTS
+            # The slot is free once the part that last used it is encoded.
+            if slot in in_slot:
+                in_slot[slot].result()
+            # Any encode that has already failed ends the run here.
+            for future in queued:
+                if future.done():
+                    future.result()
+            announce(index)
+            generated = generate_chunk(index, slot)
+            future = pool.submit(encode_chunk, index, generated)
+            in_slot[slot] = future
+            queued.append(future)
+        for future in queued:
+            future.result()
+    except BaseException:
+        # An interrupt, or a failure on either side: nothing queued is wanted
+        # any more, and an encode still running would only be waited for.
+        stopping = True
+        cancel_all()
+        raise
+    finally:
+        pool.shutdown(wait=True, cancel_futures=True)
+        if stopping:
+            reset_cancel()
+
+
 def run_chunked(
     input_path: Path,
     output: Path,
@@ -327,49 +420,51 @@ def run_chunked(
     # same encoder. The first part decides, the rest are asked for it by name,
     # and the record carries that choice across a resume so a later run cannot
     # pick a different one.
-    pinned: str | None = options.prefer_encoder or job.encoder
-    encoders: dict[str, int] = {}
-    parts: list[Path] = []
-    total_frames = 0
-    reused = 0
-    fps = Fraction(options.target_fps).limit_denominator(100000)
+    tally = _Tally(pinned=options.prefer_encoder or job.encoder, job=job)
+    tally.fps = Fraction(options.target_fps).limit_denominator(100000)
 
-    # cache_dir points outside current/, so a frame generated for one chunk is
-    # still there when a later chunk asks for the same pixels.
+    # cache_dir points outside the scratch slots, so a frame generated for one
+    # chunk is still there when a later chunk asks for the same pixels.
     per_chunk = replace(
         options, keep_temp=False, mux_audio=False, cache_dir=options.cache_dir or work.cache
     )
+    parts = [_part_path(work.parts, index) for index in range(len(plan.chunks))]
+    todo = [index for index, part in enumerate(parts) if not part.exists()]
+    reused = len(parts) - len(todo)
     for index, chunk in enumerate(plan.chunks):
-        part = _part_path(work.parts, index)
-        parts.append(part)
-        label = f"part {index + 1}/{len(plan)}"
-
-        if part.exists():
-            logger.info("%s is already encoded, skipping %s", label, chunk.name)
-            reused += 1
+        if index not in todo:
+            logger.info("part %d/%d is already encoded, skipping %s", index + 1, len(plan), chunk)
             if not options.keep_temp:
                 chunk.unlink(missing_ok=True)
-            continue
 
-        print(f"{label}: {chunk.name}")
-        result = run_pipeline(
-            chunk,
-            part,
-            replace(per_chunk, prefer_encoder=pinned),
-            work=work.claim_current(chunk),
-            bins=bins,
-        )
-        print(result.render())
-
-        pinned = pinned or result.encoder
-        job = record_encoder(job, result.encoder)
-        encoders[result.encoder] = encoders.get(result.encoder, 0) + 1
-        total_frames += result.frames
-        fps = result.fps
+    def encode_part(index: int, generated: Generated) -> None:
+        """Encode one generated chunk into its part. Runs in the encode thread."""
+        # Read here, not when the work was queued: the part before this one may
+        # have settled the encoder in the meantime.
+        encode_options = replace(per_chunk, prefer_encoder=tally.pinned)
+        result = finish(generated, parts[index], encode_options, bins=bins)
+        tally.add(result)
+        say(f"part {index + 1}/{len(plan)} encoded\n{result.render()}")
         if not options.keep_temp:
-            # The chunk's frames are already gone: run_pipeline removed them
-            # once the part existed. The chunk file itself has no reader left.
-            chunk.unlink(missing_ok=True)
+            # The chunk's frames went with its scratch slot once the part
+            # existed. The chunk file itself has no reader left.
+            plan.chunks[index].unlink(missing_ok=True)
+
+    overlap = options.overlap and len(todo) > 1
+    _encode_in_order(
+        todo,
+        generate_chunk=lambda index, slot: generate(
+            plan.chunks[index],
+            per_chunk,
+            work=work.claim_current(plan.chunks[index], slot),
+            bins=bins,
+        ),
+        encode_chunk=encode_part,
+        overlap=overlap,
+        announce=lambda index: say(f"part {index + 1}/{len(plan)}: {plan.chunks[index].name}"),
+    )
+    job, encoders, total_frames, fps = tally.job, tally.encoders, tally.frames, tally.fps
+    pinned = tally.pinned
 
     if len(encoders) > 1:
         names = ", ".join(sorted(encoders))
@@ -420,29 +515,34 @@ def run_chunked(
     )
 
 
-def chunk_frame_count(info: VideoInfo, seconds: float) -> int:
-    """Frames in one chunk, for the disk estimate.
+def chunk_frame_count(info: VideoInfo, seconds: float, *, overlap: bool = False) -> int:
+    """Frames on disk at once in chunked mode, for the disk estimate.
 
-    Chunked mode only ever holds one chunk's frames, so this — not the whole
-    file's frame count — is what the estimate should be built from.
+    One chunk's worth, or two when the encode of one chunk overlaps the
+    generation of the next, since each has its own scratch slot then. This, not
+    the whole file's frame count, is what the estimate should be built from.
     """
     if seconds <= 0 or not info.fps:
         return info.nb_frames
-    per_chunk = int(seconds * info.fps)
+    per_chunk = int(seconds * info.fps) * (SLOTS if overlap else 1)
     return min(per_chunk, info.nb_frames) if info.nb_frames else per_chunk
 
 
-def describe_plan(info: VideoInfo, seconds: float) -> str:
+def describe_plan(info: VideoInfo, seconds: float, *, overlap: bool = False) -> str:
     """One line about the cut, for the CLI's plan block."""
+    how = "encoding one while the next is generated" if overlap else "one at a time"
     if not info.duration:
-        return f"{seconds:g}s each (count unknown: the source has no duration)"
+        return f"{seconds:g}s each, {how} (count unknown: the source has no duration)"
     count = max(1, int(-(-info.duration // seconds)))
-    return f"about {count} x {seconds:g}s, one at a time"
+    if count == 1:
+        how = "one at a time"
+    return f"about {count} x {seconds:g}s, {how}"
 
 
-def peak_disk_note(estimate_total: int) -> str:
+def peak_disk_note(estimate_total: int, *, overlap: bool = False) -> str:
     """How the chunked estimate should be read."""
-    return f"peak is one chunk, about {human_bytes(estimate_total)}"
+    held = "two chunks" if overlap else "one chunk"
+    return f"peak is {held}, about {human_bytes(estimate_total)}"
 
 
 __all__ = [

@@ -40,6 +40,25 @@ def available() -> bool:
     return True
 
 
+_SAY_LOCK = threading.Lock()
+
+
+def say(text: str) -> None:
+    """Print a line to standard output without tearing a progress bar.
+
+    Safe from any thread. A chunked run reports a part as encoded from one
+    thread while another draws the bars of the next chunk, and a plain print
+    would land in the middle of a bar.
+    """
+    with _SAY_LOCK:
+        if available():
+            from tqdm import tqdm
+
+            tqdm.write(text, file=sys.stdout)
+        else:
+            print(text, flush=True)
+
+
 def wanted(stream: object | None = None) -> bool:
     """Whether a progress bar should be drawn by default.
 

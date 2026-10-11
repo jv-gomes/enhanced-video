@@ -112,6 +112,9 @@ class Options:
     #: Percent of the time the GPU tools may run; below 100 they are paused
     #: in between so the card is not saturated.
     load: int = config.DEFAULT_GPU_LOAD
+    #: In chunked mode, encode one chunk while the GPU generates the next. Two
+    #: chunks' frames are on disk at once instead of one.
+    overlap: bool = config.DEFAULT_OVERLAP
     keep_temp: bool = False
     allow_hardware: bool = True
     prefer_encoder: str | None = None

@@ -311,19 +311,23 @@ def test_a_chunked_run_refuses_to_overwrite_the_input(sample_video: Path, tmp_pa
         run_chunked(sample_video, sample_video, Options(chunk_seconds=1.0))
 
 
-def fake_pipeline(encoders: list[str], seen: list):
-    """A stand-in for run_pipeline that hands out encoders from a list.
+def fake_pipeline(encoders: list[str], seen: list, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stand-ins for generate and finish that hand out encoders from a list.
 
     The encoder a part ends up with is decided at run time by the fallback
     chain, which is exactly what cannot be provoked on demand, so the two tests
-    below drive it from here instead.
+    below drive it from here instead. ``seen`` gets the options each part was
+    *encoded* with, which is where the pin has to arrive.
     """
     from fractions import Fraction
 
     from videoenhance.pipeline import Result
 
-    def fake(chunk_path, part, options, **kwargs):
-        seen.append((chunk_path, options))
+    def fake_generate(chunk_path, options, **kwargs):
+        return chunk_path
+
+    def fake_finish(generated, part, options, **kwargs):
+        seen.append((generated, options))
         part.parent.mkdir(parents=True, exist_ok=True)
         part.write_bytes(b"part")
         return Result(
@@ -335,7 +339,8 @@ def fake_pipeline(encoders: list[str], seen: list):
             work=part.parent,
         )
 
-    return fake
+    monkeypatch.setattr(chunk, "generate", fake_generate)
+    monkeypatch.setattr(chunk, "finish", fake_finish)
 
 
 @requires_ffmpeg
@@ -344,7 +349,7 @@ def test_every_part_after_the_first_is_asked_for_the_same_encoder(
 ):
     """The parts are joined by copy, so they have to share a codec."""
     seen: list = []
-    monkeypatch.setattr(chunk, "run_pipeline", fake_pipeline(["libx265"] * 4, seen))
+    fake_pipeline(["libx265"] * 4, seen, monkeypatch)
     monkeypatch.setattr(chunk, "concat", lambda *a, **k: None)
 
     run_chunked(
@@ -367,9 +372,7 @@ def test_parts_with_different_encoders_are_not_joined_by_copy(
 ):
     """Copying mismatched codecs into one file would produce a broken video."""
     seen: list = []
-    monkeypatch.setattr(
-        chunk, "run_pipeline", fake_pipeline(["hevc_vaapi", "libx265", "libx265", "libx265"], seen)
-    )
+    fake_pipeline(["hevc_vaapi", "libx265", "libx265", "libx265"], seen, monkeypatch)
 
     with pytest.raises(ChunkError, match="different encoders"):
         run_chunked(

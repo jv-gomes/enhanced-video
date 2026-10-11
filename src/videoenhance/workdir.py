@@ -35,6 +35,9 @@ CURRENT_NAME = "current"
 CACHE_NAME = "cache"
 #: Scratch space for the deduplicated set a stage actually sends to the GPU.
 DEDUP_NAME = "dedup"
+#: Scratch directories a chunked run alternates between: one for the chunk the
+#: GPU is generating, one for the chunk being encoded beside it.
+SLOTS = 2
 #: Marker inside ``current/`` naming the chunk its frames belong to.
 CURRENT_MARKER = "chunk.txt"
 
@@ -195,8 +198,18 @@ class WorkDir:
         """
         return self.root / CURRENT_NAME
 
-    def claim_current(self, chunk: Path) -> WorkDir:
-        """Hand ``current/`` to ``chunk``, clearing another chunk's leftovers.
+    def slot(self, index: int) -> Path:
+        """Scratch directory ``index`` of a chunked run.
+
+        Slot 0 is ``current/``, which is what a run made before overlapping
+        existed used, so its frames are still found on a resume.
+        """
+        if not 0 <= index < SLOTS:
+            raise ValueError(f"there are {SLOTS} scratch slots, not {index + 1}")
+        return self.current if index == 0 else self.root / f"{CURRENT_NAME}-{index}"
+
+    def claim_current(self, chunk: Path, slot: int = 0) -> WorkDir:
+        """Hand a scratch slot to ``chunk``, clearing another chunk's leftovers.
 
         Returns the :class:`WorkDir` the stages should use. Resuming only works
         because the frames in a stage directory are counted against what the
@@ -205,18 +218,19 @@ class WorkDir:
         apart; when it does not name this chunk, the directory is thrown away
         before anything looks inside it.
         """
-        inner = WorkDir(root=self.current)
-        marker = self.current / CURRENT_MARKER
-        if self.current.exists():
+        directory = self.slot(slot)
+        inner = WorkDir(root=directory)
+        marker = directory / CURRENT_MARKER
+        if directory.exists():
             previous = marker.read_text().strip() if marker.exists() else ""
             if previous != chunk.name:
                 logger.info(
                     "clearing %s: it holds frames for %s, not %s",
-                    self.current,
+                    directory,
                     previous or "an unknown chunk",
                     chunk.name,
                 )
-                shutil.rmtree(self.current, ignore_errors=True)
+                shutil.rmtree(directory, ignore_errors=True)
         inner.create()
         marker.write_text(f"{chunk.name}\n")
         return inner

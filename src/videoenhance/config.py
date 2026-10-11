@@ -72,6 +72,11 @@ DEFAULT_CACHE_SIZE = 2 * 1024**3
 #: hundreds of gigabytes of scratch space. 0 disables chunking and processes
 #: the file in a single pass.
 DEFAULT_CHUNK_SECONDS = 30.0
+#: Encode one chunk while the next is generated. The GPU stages and the encode
+#: use different parts of the machine, so running them side by side keeps the
+#: GPU busy instead of idle through every encode; the price is a second chunk
+#: of frames on disk.
+DEFAULT_OVERLAP = True
 FRAME_FORMATS = ("png", "jpg")
 FRAME_PATTERN = "%08d"
 
