@@ -50,7 +50,15 @@ PIXEL_OPTIONS = (
     "frame_format",
     "order",
     "chunk_seconds",
+    "blocks",
+    "block_margin",
 )
+
+#: What a record written before an option existed should be read as having
+#: held. Without it ``compare`` would skip an option the record lacks, and a
+#: job of whole frames could be resumed in block mode with nobody told: the
+#: silent mix the record exists to refuse.
+LEGACY_VALUES = {"blocks": 1, "block_margin": 0}
 
 #: How each option is spelled on the command line, for the mismatch message.
 OPTION_FLAGS = {
@@ -61,6 +69,8 @@ OPTION_FLAGS = {
     "frame_format": "--frame-format",
     "order": "--order",
     "chunk_seconds": "--chunk",
+    "blocks": "--blocks",
+    "block_margin": "--block-margin",
 }
 
 
@@ -139,9 +149,21 @@ def for_input(
     )
 
 
+def _normalised(options: dict[str, object]) -> dict[str, object]:
+    """``options`` with the margin zeroed whenever blocks are off.
+
+    The margin does nothing at one block per side, so two settings that differ
+    only in it produce the same pixels, and must not refuse a resume.
+    """
+    if options.get("blocks") == 1 and "block_margin" in options:
+        return {**options, "block_margin": 0}
+    return options
+
+
 def options_of(options: object) -> dict[str, object]:
     """Pull the pixel-affecting settings out of an ``Options`` instance."""
-    return {name: getattr(options, name) for name in PIXEL_OPTIONS if hasattr(options, name)}
+    taken = {name: getattr(options, name) for name in PIXEL_OPTIONS if hasattr(options, name)}
+    return _normalised(taken)
 
 
 def load(root: Path) -> Job | None:
@@ -250,11 +272,17 @@ def compare(job: Job, options: dict[str, object]) -> dict[str, tuple[object, obj
     Only names present in ``options`` are compared, so a caller that knows the
     user spelled out two of them can ask about just those.
     """
+    # A name the caller did not ask about is the same as the record's, so the
+    # margin can be judged against the right number of blocks.
+    recorded_all = _normalised({**LEGACY_VALUES, **job.options})
+    asked_all = _normalised({**recorded_all, **options})
     changed: dict[str, tuple[object, object]] = {}
-    for name, asked in options.items():
-        if name not in PIXEL_OPTIONS or name not in job.options:
+    for name in options:
+        if name not in PIXEL_OPTIONS:
             continue
-        recorded = job.options[name]
+        if name not in job.options and name not in LEGACY_VALUES:
+            continue
+        recorded, asked = recorded_all[name], asked_all[name]
         if _differs(recorded, asked):
             changed[name] = (recorded, asked)
     return changed
@@ -397,6 +425,7 @@ def _show(value: object) -> str:
 
 
 __all__ = [
+    "LEGACY_VALUES",
     "OPTION_FLAGS",
     "PIXEL_OPTIONS",
     "STATE_NAME",

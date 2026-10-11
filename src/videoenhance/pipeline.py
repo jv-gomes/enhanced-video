@@ -102,6 +102,10 @@ class Options:
     gpu: int = config.DEFAULT_GPU_ID
     tile: int = config.DEFAULT_TILE_SIZE
     threads: str = config.DEFAULT_THREADS
+    #: Blocks per side for block dedup, 1 meaning whole frames only.
+    blocks: int = config.DEFAULT_BLOCKS
+    #: Pixels of neighbours upscaled with each block. Only matters above 1.
+    block_margin: int = config.DEFAULT_BLOCK_MARGIN
     #: Percent of the time the GPU tools may run; below 100 they are paused
     #: in between so the card is not saturated.
     load: int = config.DEFAULT_GPU_LOAD

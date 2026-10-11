@@ -153,6 +153,47 @@ def test_the_mismatch_message_names_the_flags_and_the_way_out(tmp_path: Path):
     assert "--restart" in message
 
 
+def test_a_record_from_before_blocks_is_read_as_whole_frames(tmp_path: Path):
+    """SETTINGS has no block keys, as every record written before M10."""
+    job = make_job(tmp_path)
+
+    assert "blocks" not in job.options
+    assert state.compare(job, {"blocks": 1}) == {}
+    assert state.compare(job, {"blocks": 3}) == {"blocks": (1, 3)}
+    assert state.compare(job, {"blocks": 3, "block_margin": 16}) == {
+        "blocks": (1, 3),
+        "block_margin": (0, 16),
+    }
+    assert "--blocks" in state.render_mismatch(job, state.compare(job, {"blocks": 3}))
+
+
+def test_the_margin_is_free_to_change_while_blocks_are_off(tmp_path: Path):
+    off = make_job(tmp_path, blocks=1, block_margin=0)
+
+    assert state.compare(off, {"block_margin": 16}) == {}
+    assert state.compare(off, {"blocks": 1, "block_margin": 32}) == {}
+
+
+def test_the_margin_matters_once_blocks_are_on(tmp_path: Path):
+    on = make_job(tmp_path, blocks=3, block_margin=16)
+
+    assert state.compare(on, {"block_margin": 16}) == {}
+    assert state.compare(on, {"block_margin": 8}) == {"block_margin": (16, 8)}
+    # Turning blocks off makes the recorded margin irrelevant to the new run
+    # but not the blocks themselves, which are what changed.
+    assert state.compare(on, {"blocks": 1, "block_margin": 16}) == {
+        "blocks": (3, 1),
+        "block_margin": (16, 0),
+    }
+
+
+def test_options_of_records_no_margin_when_blocks_are_off():
+    from videoenhance.pipeline import Options
+
+    assert state.options_of(Options(blocks=1, block_margin=16))["block_margin"] == 0
+    assert state.options_of(Options(blocks=3, block_margin=16))["block_margin"] == 16
+
+
 def test_options_of_reads_them_off_an_options_object():
     from videoenhance.pipeline import Options
 

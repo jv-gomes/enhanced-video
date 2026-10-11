@@ -42,6 +42,17 @@ ORDER_INTERPOLATE_FIRST = "interpolate-first"
 ORDERS = (ORDER_UPSCALE_FIRST, ORDER_INTERPOLATE_FIRST)
 DEFAULT_ORDER = ORDER_UPSCALE_FIRST
 
+#: Blocks per side for block dedup. 1 means whole frames only, which is what
+#: dedup did before blocks existed. Off by default because every block carries
+#: a margin, so on footage with nothing static in it a grid does more GPU work
+#: than whole frames; the saving is measured first with
+#: ``scripts/measure_tile_reuse.py``.
+DEFAULT_BLOCKS = 1
+#: Pixels of neighbours upscaled with each block so that stitching leaves no
+#: seams: with none the seams measured 47.7 dB and were visible along every
+#: edge, with 8 and above over 60 dB.
+DEFAULT_BLOCK_MARGIN = 16
+
 DEFAULT_SCALE = 2
 DEFAULT_TARGET_FPS = 60
 DEFAULT_FRAME_FORMAT = "png"
