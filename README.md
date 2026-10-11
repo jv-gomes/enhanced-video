@@ -293,6 +293,114 @@ Use --restart to throw that away and start over, or run with the original option
 `--restart` discards the saved work and begins again. Settings that do not
 change the pixels — `--gpu`, `--tile`, `--gpu-load`, `--keep-temp` — are free to differ.
 
+## Troubleshooting
+
+Run `python -m videoenhance.cli --doctor` first. It checks FFmpeg, the encoders,
+Vulkan, both executables and their models, and says what to do about each failure.
+
+### The GPU runs out of memory
+
+**Symptom:** `the GPU ran out of memory at every tile size tried (0, 256, 128)`,
+or `vkAllocateMemory failed` / `out of device memory` in the output of Real-ESRGAN.
+
+**Fix:** the tool already retries at tile sizes 256 and then 128 by itself. If that
+was not enough, start lower with `--tile 64`, ask for a smaller `--scale`, and close
+whatever else is using the card (a browser with hardware acceleration will do it).
+On 4K-or-larger frames RIFE's UHD mode is the first thing to give way, and it is
+retried without it automatically. `--frame-format jpg` does not help here: it saves
+disk, not video memory.
+
+### It is using the wrong GPU
+
+**Symptom:** the run is far slower than it should be, or `--doctor` lists more than
+one device (`+1 more; select with --gpu`).
+
+**Fix:** a machine with an integrated and a dedicated GPU numbers them, and the
+default is device 0. Real-ESRGAN prints the devices it sees as it starts, in the form
+`[0 AMD Radeon RX 6650 XT (RADV NAVI23)]`, and the number in the brackets is what
+`--gpu` takes: run with `-v`, or call `realesrgan-ncnn-vulkan` on any image, to see it.
+Then pass the dedicated card's number, for example `--gpu 1`.
+
+### Vulkan sees no GPU
+
+**Symptom:** `--doctor` reports `[FAIL] vulkan: no Vulkan device found`.
+
+**Fix:** update the driver: Adrenalin on Windows, a recent Mesa with RADV on Linux
+(`vulkan-radeon` or `mesa-vulkan-drivers`, depending on the distribution), then check
+that `vulkaninfo --summary` names your card.
+
+### The card gets hot or loud
+
+**Fix:** `--gpu-load 50` makes the upscaler and interpolator run half the time and
+rest the other half, so the card cools between bursts. The output is identical and the
+run takes longer. See [Limiting how hard the GPU works](#limiting-how-hard-the-gpu-works).
+
+### The warning says the frames will not fit on the disk
+
+**Symptom:** `warning: the intermediate frames need about 40.2 GB but only 12.0 GB is free.`
+
+**Fix:** frames are PNG and large. Chunked processing is on by default and keeps the cost
+to one chunk, so first check that the estimate is for a chunk (`--chunk 0` turns that
+off). Then, in order of effect: a smaller `--chunk 10`, `--frame-format jpg` (about a
+fifth of the size, slightly lossy), a smaller `--scale`, or `--work-dir` on a bigger
+disk. `--dry-run` prints the estimate without processing anything.
+
+### The audio drifts out of sync
+
+**Symptom:** the sound and the picture agree at the start and part ways later.
+
+**What it usually is:** a variable-frame-rate source, which is what phones record. Extracting
+frames and re-encoding them at a constant rate shifts the audio. The tool normalises such a
+source to a constant rate first, and the plan it prints says `(VFR)` when it did; the audio
+is also muxed once, at the end, so chunks cannot accumulate an error between them.
+
+**If it drifts anyway:** run `--probe-only` and compare the frame rates and the duration
+with what you expect, then try `--chunk 0` on a short clip to see whether chunking is
+involved, and keep the original file: that is a bug worth reporting with both outputs.
+
+### Ghost or smeared frames at a cut
+
+**Symptom:** a frame between two shots blends them.
+
+**Why:** RIFE invents the frames between two others, and at a hard cut there is nothing
+to blend. Detecting cuts and holding the frame instead is on the
+[roadmap](roadmap.md) but not built.
+
+**Workaround:** `--fps` set to the source's own rate skips interpolation entirely, so only
+the upscale runs. Or split the video at the cuts that matter and process the parts apart.
+
+### Visible seams or flicker with `--blocks`
+
+**Symptom:** faint lines along a grid, or parts of the picture that shift between frames.
+
+**Fix:** keep `--block-margin` at 8 or more (the default is 16): with none, the seams
+measured 47.7 dB against a whole-frame upscale and were visible. If it persists, `--blocks 1`
+returns to whole frames. The grid is a pixel option, so a job started with one value
+cannot be resumed with another.
+
+### `hevc_vaapi` or another encoder fails
+
+**Symptom:** `encoded ... with libx264` where you expected hardware, or an `EncodeError`.
+
+**Fix:** the encoder chain falls back by itself, hardware first and CPU last, so the video
+is still produced. `--doctor` and `--dry-run` print the chain. To pick one, `--encoder
+libx265` (or any encoder `ffmpeg -encoders` lists). On Linux the hardware encoders need
+`/dev/dri/renderD128`, which `--doctor` checks.
+
+### `error: this job was started with different options`
+
+**Why:** the frames already on disk were made with the old options, and a frame count does
+not change when `--scale` or `--model` does, so continuing would silently mix the two.
+
+**Fix:** run again with the options the message lists, or `--restart` to discard the saved
+work. `--jobs` lists what is unfinished; `--resume <id>` continues one. See
+[Stopping and continuing later](#stopping-and-continuing-later).
+
+### `missing models` or `not found` from `--doctor`
+
+**Fix:** see [Installing the NCNN binaries](#installing-the-ncnn-binaries). The usual cause
+is a Real-ESRGAN zip from the wrong repository, which has the executable and no `models/`.
+
 ## Development
 
 ```bash
