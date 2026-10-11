@@ -22,10 +22,8 @@ executables.
 ## Setup
 
 1. Install FFmpeg and verify it: `ffmpeg -version`.
-2. Download the NCNN releases for your OS and unpack them, with their model
-   folders, into `bin/`:
-   - [realesrgan-ncnn-vulkan](https://github.com/xinntao/Real-ESRGAN-ncnn-vulkan) → `bin/realesrgan/`
-   - [rife-ncnn-vulkan](https://github.com/nihui/rife-ncnn-vulkan) → `bin/rife/`
+2. Download the two NCNN releases for your OS and unpack them into `bin/`, as
+   described under [Installing the NCNN binaries](#installing-the-ncnn-binaries).
 3. Install the package:
 
    ```bash
@@ -40,6 +38,62 @@ executables.
    ```
 
 `bin/` is gitignored; the binaries are never committed.
+
+### Installing the NCNN binaries
+
+Both programs run on AMD, Intel and NVIDIA through Vulkan, and each needs its
+model files beside it. This is the layout the tool looks for:
+
+```
+bin/
+├── realesrgan/
+│   ├── realesrgan-ncnn-vulkan        (.exe on Windows)
+│   └── models/                       realesr-animevideov3-x2.bin, ...
+└── rife/
+    ├── rife-ncnn-vulkan              (.exe on Windows)
+    └── rife-v4.6/                    flownet.bin, flownet.param
+```
+
+Pick the zip for your OS:
+
+| | Linux | Windows | macOS |
+|---|---|---|---|
+| **Real-ESRGAN** | `realesrgan-ncnn-vulkan-20220424-ubuntu.zip` | `…-windows.zip` | `…-macos.zip` |
+| **RIFE** | `rife-ncnn-vulkan-20221029-ubuntu.zip` | `…-windows.zip` | `…-macos.zip` |
+| from | [Real-ESRGAN v0.2.5.0](https://github.com/xinntao/Real-ESRGAN/releases/tag/v0.2.5.0) | same | same |
+| from | [rife-ncnn-vulkan 20221029](https://github.com/nihui/rife-ncnn-vulkan/releases/tag/20221029) | same | same |
+
+(macOS builds exist, but this project is developed and tested on Linux with an
+AMD card.)
+
+Two things catch people out:
+
+- **Download Real-ESRGAN from `xinntao/Real-ESRGAN`, not from
+  `Real-ESRGAN-ncnn-vulkan`.** The releases of the latter hold the executable
+  alone, with no `models/` folder, and the tool then reports "missing models".
+- **The two zips are laid out differently.** The Real-ESRGAN one is flat: unpack
+  it straight into `bin/realesrgan/`. The RIFE one has a wrapper folder,
+  `rife-ncnn-vulkan-20221029-ubuntu/`, whose *contents* belong in `bin/rife/`.
+
+On Linux, for example:
+
+```bash
+mkdir -p bin/realesrgan bin/rife
+unzip realesrgan-ncnn-vulkan-20220424-ubuntu.zip -d bin/realesrgan
+unzip rife-ncnn-vulkan-20221029-ubuntu.zip -d /tmp/rife
+mv /tmp/rife/rife-ncnn-vulkan-20221029-ubuntu/* bin/rife/
+chmod +x bin/realesrgan/realesrgan-ncnn-vulkan bin/rife/rife-ncnn-vulkan
+```
+
+The RIFE zip is about 430 MB because it carries every model. Only `rife-v4.6`,
+the default, is needed; the others are selected with `--rife-model` and can be
+deleted if you do not use them. The Real-ESRGAN zip also has two demo images and
+a video that can go.
+
+Executables that live somewhere else are found through `REALESRGAN_BIN` and
+`RIFE_BIN`, and a `realesrgan-ncnn-vulkan` or `rife-ncnn-vulkan` on `PATH` is
+used when `bin/` has none; the models are looked up beside the binary either way.
+When done, `python -m videoenhance.cli --doctor` checks the whole setup.
 
 ## Usage
 

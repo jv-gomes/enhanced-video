@@ -172,7 +172,7 @@ Detect availability with `ffmpeg -hide_banner -encoders` and fall back if the ha
 ## Setup
 
 1. Install FFmpeg (on Windows, a "full" build that includes AMF).
-2. Download the `realesrgan-ncnn-vulkan` and `rife-ncnn-vulkan` releases for the correct OS and extract them into `bin/realesrgan/` and `bin/rife/` along with their model folders.
+2. Download the `realesrgan-ncnn-vulkan` and `rife-ncnn-vulkan` releases for the correct OS and extract them into `bin/realesrgan/` and `bin/rife/` along with their model folders. The Real-ESRGAN one must come from `xinntao/Real-ESRGAN` (v0.2.5.0): the releases of the `-ncnn-vulkan` repository have the executable but no `models/`. Its zip is flat; RIFE's has a wrapper folder. The README has the details.
 3. Update the AMD driver (Adrenalin on Windows; recent Mesa/RADV on Linux) to ensure Vulkan support.
 4. `pip install -r requirements.txt`
 
