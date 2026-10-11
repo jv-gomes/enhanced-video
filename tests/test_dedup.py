@@ -28,6 +28,7 @@ from videoenhance.pipeline import Options, WorkDir, run_pipeline
 from videoenhance.probe import probe
 
 from .conftest import HELD_DRAWINGS, HELD_FOR, requires_ffmpeg
+from .test_upscale import STUB_VRAM
 
 CPU_ONLY = {"allow_hardware": False}
 
@@ -388,3 +389,29 @@ def pixel_hashes_of(video: Path) -> list[str]:
         for line in completed.stdout.splitlines()
         if line and not line.startswith("#")
     ]
+
+
+@requires_ffmpeg
+def test_frames_are_cached_under_the_tile_that_made_them(
+    held_video: Path, tmp_path: Path, stub_bin
+):
+    """After an out-of-VRAM retry the frames belong to the smaller tile.
+
+    The tile is in the key because tiling changes the result at the seams;
+    filing frames made at 128 under tile 0 would serve them as if they had been.
+    """
+    stub_bin("REALESRGAN_BIN", STUB_VRAM)
+    cache = cache_in(tmp_path, tile=0)
+
+    result, _ = upscale_deduplicated(
+        frames_of(held_video, tmp_path),
+        tmp_path / "up",
+        scratch=tmp_path / "dedup",
+        cache=cache,
+        tile=0,
+    )
+
+    assert result.tile == 128
+    assert len(cache.entries()) == 0
+    assert len(cache.with_tile(128).entries()) == HELD_DRAWINGS
+    assert len(list((tmp_path / "up").glob("*.png"))) == HELD_DRAWINGS * HELD_FOR

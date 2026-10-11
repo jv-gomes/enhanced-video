@@ -182,10 +182,32 @@ class FrameCache:
         frame_format: str,
         budget: int = config.DEFAULT_CACHE_SIZE,
     ) -> None:
-        self.slot = Path(root) / f"{model}-{scale}x-t{tile}-{frame_format}"
+        self.root = Path(root)
+        self.model = model
+        self.scale = scale
+        self.tile = tile
+        self.slot = self.root / f"{model}-{scale}x-t{tile}-{frame_format}"
         self.frame_format = frame_format
         self.budget = budget
         self.hits = 0
+
+    def with_tile(self, tile: int) -> FrameCache:
+        """The cache for another tile size, which is another slot.
+
+        The tile that finally worked can be smaller than the one asked for, when
+        the GPU ran out of memory part-way through, and a frame must be filed
+        under the tile that made it.
+        """
+        if tile == self.tile:
+            return self
+        return FrameCache(
+            self.root,
+            model=self.model,
+            scale=self.scale,
+            tile=tile,
+            frame_format=self.frame_format,
+            budget=self.budget,
+        )
 
     def path_for(self, digest: str) -> Path:
         return self.slot / f"{digest}.{self.frame_format}"
@@ -350,14 +372,18 @@ def upscale_deduplicated(
             bins=bins,
             force=True,
         )
+        made_by = cache.with_tile(result.tile)
         for rank, digest in enumerate(missing, start=1):
-            cache.put(digest, todo_up / f"{rank:08d}.{frame_format}")
+            made_by.put(digest, todo_up / f"{rank:08d}.{frame_format}")
         clear_frames(todo, frame_format)
         clear_frames(todo_up, frame_format)
 
+    # A frame is where the tile that made it filed it: the requested slot for the
+    # hits, the slot of the tile that worked for what was just generated.
+    sources = [cache] if result.tile == cache.tile else [cache, cache.with_tile(result.tile)]
     clear_frames(frames_out, frame_format)
     for position, digest in enumerate(index.hashes, start=1):
-        cached = cache.get(digest)
+        cached = next((found for c in sources if (found := c.get(digest))), None)
         if cached is None:
             raise DedupError(
                 f"frame {position} is missing from the cache after upscaling; "
@@ -365,7 +391,8 @@ def upscale_deduplicated(
             )
         link_or_copy(cached, frames_out / f"{position:08d}.{frame_format}")
 
-    cache.trim()
+    for slot in sources:
+        slot.trim()
     stats = DedupStats(
         frames=index.frames,
         unique=len(unique),

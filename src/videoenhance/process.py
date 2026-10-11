@@ -81,8 +81,8 @@ def _set_suspended(proc: subprocess.Popen[str], suspended: bool) -> None:
 
             handle = ctypes.windll.kernel32.OpenProcess(0x0800, False, proc.pid)  # SUSPEND_RESUME
             if handle:
-                fn = ctypes.windll.ntdll.NtSuspendProcess if suspended else ctypes.windll.ntdll.NtResumeProcess
-                fn(handle)
+                ntdll = ctypes.windll.ntdll
+                (ntdll.NtSuspendProcess if suspended else ntdll.NtResumeProcess)(handle)
                 ctypes.windll.kernel32.CloseHandle(handle)
         else:
             os.kill(proc.pid, signal.SIGSTOP if suspended else signal.SIGCONT)
