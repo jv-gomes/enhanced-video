@@ -211,12 +211,16 @@ def _upscale_stage(
                 tile=options.tile,
                 frame_format=options.frame_format,
                 budget=options.cache_size,
+                blocks=options.blocks,
+                margin=options.block_margin if options.blocks > 1 else 0,
             )
             result, stats = upscale_deduplicated(
                 frames.directory,
                 work.frames_up,
                 scratch=work.dedup,
                 cache=cache,
+                blocks=options.blocks,
+                margin=options.block_margin if options.blocks > 1 else 0,
                 **shared,
             )
         else:

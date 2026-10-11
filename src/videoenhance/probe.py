@@ -100,6 +100,18 @@ def _ffprobe_json(args: list[object], bins: Binaries) -> dict:
         raise ProbeError(f"could not parse ffprobe output for {cmd[-1]}: {exc}") from exc
 
 
+def frame_size(path: Path, bins: Binaries | None = None) -> tuple[int, int]:
+    """Width and height of an image or of a video's first stream."""
+    bins = bins or binaries()
+    data = _ffprobe_json(
+        ["-select_streams", "v:0", "-show_entries", "stream=width,height", str(path)], bins
+    )
+    streams = data.get("streams") or []
+    if not streams or not streams[0].get("width"):
+        raise ProbeError(f"{path} has no picture whose size can be read")
+    return int(streams[0]["width"]), int(streams[0]["height"])
+
+
 def has_audio_stream(path: Path, bins: Binaries | None = None) -> bool:
     """Whether ``path`` carries at least one audio stream."""
     bins = bins or binaries()

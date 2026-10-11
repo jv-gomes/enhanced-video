@@ -215,6 +215,32 @@ done
 """
 
 
+#: Like :data:`STUB_RECORDING` but it really scales, by nearest neighbour, which
+#: is purely local: a pixel of the output depends only on one pixel of the input.
+#: That makes it the strongest stand-in for the upscaler that a block test can
+#: have, because cutting a frame into blocks and stitching them back must then
+#: give *exactly* the whole-frame result. It also logs how many images each call
+#: was handed, in ``$ARGV_LOG.count``.
+STUB_SCALING = """
+set -euo pipefail
+echo "$@" >> "$ARGV_LOG"
+IN=""; OUT=""; S=2
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -i) IN="$2"; shift 2;;
+    -o) OUT="$2"; shift 2;;
+    -s) S="$2"; shift 2;;
+    *) shift;;
+  esac
+done
+mkdir -p "$OUT"
+echo "$(ls "$IN" | wc -l)" >> "$ARGV_LOG.count"
+for f in "$IN"/*; do
+  [[ -e "$f" ]] || continue
+  ffmpeg -loglevel error -y -i "$f" -vf "scale=iw*$S:ih*$S:flags=neighbor" "$OUT/$(basename "$f")"
+done
+"""
+
 @pytest.fixture
 def stub_bin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Factory for stub NCNN binaries, with a log of how they were called."""
@@ -243,3 +269,37 @@ def frames(tmp_path: Path):
         return directory
 
     return make
+
+
+#: A 240x240 picture that is different everywhere, so that no two blocks of it
+#: are alike, with a small white box that moves inside the top-left block only.
+BLOCK_SIZE = 240
+BLOCK_FRAMES = 6
+
+
+@pytest.fixture(scope="session")
+def moving_box_frames(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """PNG frames of a static background and one moving box, written losslessly.
+
+    With a 3x3 grid the box stays in the top-left block, 80x80, and more than a
+    margin of 8 pixels away from every other block's padded region (which begin
+    at 72), so each frame after the first changes exactly one block.
+    """
+    directory = tmp_path_factory.mktemp("moving-box")
+    background = "format=gbrp,geq=r='mod(X*7+Y*3,256)':g='mod(X*5+Y*11,256)':b='mod(X+Y,256)'"
+    for index in range(BLOCK_FRAMES):
+        box = f"drawbox=x={10 + 5 * index}:y=20:w=10:h=10:color=white:t=fill"
+        _generate(
+            directory / f"{index + 1:08d}.png",
+            [
+                "-f",
+                "lavfi",
+                "-i",
+                f"nullsrc=s={BLOCK_SIZE}x{BLOCK_SIZE}",
+                "-vf",
+                f"{background},format=rgb24,{box}",
+                "-frames:v",
+                "1",
+            ],
+        )
+    return directory
