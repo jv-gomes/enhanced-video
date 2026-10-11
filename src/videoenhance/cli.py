@@ -11,7 +11,8 @@ import logging
 import sys
 from pathlib import Path
 
-from . import __version__, config, state
+from . import __version__, config, configfile, state
+from .blocks import grid_tiles, overhead
 from .chunk import ChunkError, chunk_frame_count, run_chunked
 from .chunk import describe_plan as describe_chunks
 from .doctor import report as doctor_report
@@ -124,6 +125,37 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--blocks",
+        type=int,
+        metavar="N",
+        default=None,
+        help=(
+            "split each frame that is not a repeat into an N x N grid and upscale "
+            "only the blocks not seen before, which pays off when only part of the "
+            "picture moves; 1 keeps whole frames. Measure first with "
+            f"scripts/measure_tile_reuse.py (default: {config.DEFAULT_BLOCKS})"
+        ),
+    )
+    parser.add_argument(
+        "--block-margin",
+        type=int,
+        metavar="PX",
+        default=None,
+        help=(
+            "pixels of neighbours upscaled with each block so the joins show no "
+            f"seams; only used with --blocks (default: {config.DEFAULT_BLOCK_MARGIN})"
+        ),
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        metavar="PATH",
+        help=(
+            f"read settings from this TOML file instead of {configfile.FILE_NAME} "
+            f"in the project or ${configfile.ENV_VAR}; the command line still wins"
+        ),
+    )
+    parser.add_argument(
         "--cache-size",
         type=parse_size,
         metavar="BYTES",
@@ -232,6 +264,8 @@ RESOLVED_ARGS = {
     "order": config.DEFAULT_ORDER,
     "frame_format": config.DEFAULT_FRAME_FORMAT,
     "chunk": config.DEFAULT_CHUNK_SECONDS,
+    "blocks": config.DEFAULT_BLOCKS,
+    "block_margin": config.DEFAULT_BLOCK_MARGIN,
 }
 
 #: Maps those argument names to the option names the pipeline and the job
@@ -243,21 +277,32 @@ ARG_TO_OPTION = {
     "order": "order",
     "frame_format": "frame_format",
     "chunk": "chunk_seconds",
+    "blocks": "blocks",
+    "block_margin": "block_margin",
 }
 
 
-def resolve_args(args: argparse.Namespace) -> set[str]:
+def resolve_args(
+    args: argparse.Namespace, file_values: dict[str, int] | None = None
+) -> set[str]:
     """Fill in the defaults and report which options the user actually gave.
 
     Everything downstream wants resolved values, but ``--resume`` has to know
     the difference between an option that was typed and one that was left out:
     typing ``--scale 4`` on a job recorded at 2 is a conflict, while not
     mentioning ``--scale`` is not.
+
+    A value from the config file fills a gap the way a default does, and is not
+    "given" either. That is what lets a resume after editing the file carry on
+    with the recorded setting instead of refusing over something nobody typed.
+    The order is: typed flag, then the recorded job, then the file, then the
+    built-in default.
     """
+    file_values = file_values or {}
     given = {name for name in RESOLVED_ARGS if getattr(args, name) is not None}
     for name, default in RESOLVED_ARGS.items():
         if getattr(args, name) is None:
-            setattr(args, name, default)
+            setattr(args, name, file_values.get(name, default))
     return {ARG_TO_OPTION[name] for name in given}
 
 
@@ -266,7 +311,8 @@ def apply_job(args: argparse.Namespace, job: state.Job) -> None:
     args.input = job.input
     args.output = job.output
     reverse = {option: arg for arg, option in ARG_TO_OPTION.items()}
-    for option, value in job.options.items():
+    # A record from before an option existed is read as what it must have held.
+    for option, value in {**state.LEGACY_VALUES, **job.options}.items():
         if option in reverse:
             setattr(args, reverse[option], value)
 
@@ -323,6 +369,8 @@ def options_from_args(args: argparse.Namespace) -> Options:
         prefer_encoder=args.encoder,
         dedup=args.dedup,
         cache_size=args.cache_size,
+        blocks=args.blocks,
+        block_margin=args.block_margin,
     )
 
 
@@ -332,6 +380,7 @@ def describe_plan(
     output: Path,
     work: WorkDir,
     estimate,
+    config_path: Path | None = None,
 ) -> str:
     """The run the given arguments would perform, as a readable block."""
     chain = encoder_chain(prefer=args.encoder, allow_hardware=True)
@@ -344,6 +393,12 @@ def describe_plan(
         f"order:   {args.order}",
         f"encoder: {describe_chain(chain)}",
     ]
+    if args.blocks > 1:
+        lines.append(
+            f"blocks:  {args.blocks}x{args.blocks} grid, {args.block_margin} px margin"
+        )
+    if config_path is not None:
+        lines.append(f"config:  {config_path}")
     if chunking(info, args.chunk):
         lines.append(f"chunks:  {describe_chunks(info, args.chunk)}")
     lines += [
@@ -351,6 +406,52 @@ def describe_plan(
         f"disk:    {estimate.render()}",
     ]
     return "\n".join(lines)
+
+
+#: A block narrower than this is mostly margin, and the grid cannot pay for itself.
+MIN_BLOCK_SIDE = 32
+#: Below this the seams measured visible (47.7 dB with no margin at all).
+MIN_SAFE_MARGIN = 8
+#: Extra GPU work, for a frame that changes everywhere, above which to warn.
+MAX_BLOCK_OVERHEAD = 0.5
+
+
+def check_blocks(args: argparse.Namespace, info, parser: argparse.ArgumentParser) -> None:
+    """Settle ``--blocks`` against the video and the other options.
+
+    Blocks that cannot do anything are switched off here, before the job is
+    recorded, so that the record says what actually ran and a later resume is
+    judged against that.
+    """
+    if args.blocks <= 1:
+        return
+    if not args.dedup:
+        print("note: --blocks needs dedup; running with whole frames", file=sys.stderr)
+        args.blocks = 1
+        return
+    try:
+        bare = grid_tiles(info.width, info.height, args.blocks, 0)
+    except ValueError as exc:
+        parser.error(str(exc))
+    side = min(min(t.x1 - t.x0, t.y1 - t.y0) for t in bare)
+    if side < MIN_BLOCK_SIDE:
+        parser.error(
+            f"a {args.blocks}x{args.blocks} grid makes blocks {side} px on a side, under "
+            f"{MIN_BLOCK_SIDE}; use fewer blocks"
+        )
+    if args.block_margin < MIN_SAFE_MARGIN:
+        print(
+            f"warning: a margin under {MIN_SAFE_MARGIN} px leaves visible seams between "
+            "blocks (47.7 dB with none); check with scripts/measure_tile_reuse.py --seam-test",
+            file=sys.stderr,
+        )
+    extra = overhead(grid_tiles(info.width, info.height, args.blocks, args.block_margin)) - 1
+    if extra > MAX_BLOCK_OVERHEAD:
+        print(
+            f"warning: with this grid and margin a frame that changes everywhere costs "
+            f"{extra:+.0%} GPU work; it only pays off if most of the picture holds still",
+            file=sys.stderr,
+        )
 
 
 def chunking(info, seconds: float) -> bool:
@@ -416,6 +517,10 @@ def validate(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
         parser.error("--tile must be 0 (automatic) or greater")
     if args.chunk < 0:
         parser.error("--chunk must be 0 (no chunking) or greater")
+    if args.blocks < 1:
+        parser.error("--blocks must be 1 (whole frames) or greater")
+    if args.block_margin < 0:
+        parser.error("--block-margin must be 0 or greater")
     if args.encoder and args.encoder not in available_encoders():
         parser.error(
             f"--encoder {args.encoder} is not available in this FFmpeg build; "
@@ -437,7 +542,21 @@ def main(argv: list[str] | None = None) -> int:
         print(state.describe(state.list_jobs(args.work_dir)))
         return EXIT_OK
 
-    given = resolve_args(args)
+    try:
+        config_path = configfile.locate(args.config)
+        file_values = configfile.load(config_path)
+    except configfile.ConfigError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+
+    given = resolve_args(args, file_values)
+    # The options whose value came from the file, to name it when it is the
+    # reason a resume is refused.
+    from_file = {
+        ARG_TO_OPTION[arg]: str(config_path)
+        for arg in file_values
+        if ARG_TO_OPTION[arg] not in given
+    }
 
     if args.resume and args.restart:
         parser.error("--resume and --restart ask for opposite things; pick one")
@@ -480,6 +599,7 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_OK
 
     validate(args, parser)
+    check_blocks(args, info, parser)
     output = args.output or default_output(args.input)
     work = WorkDir.for_input(args.input, base=args.work_dir)
     options = options_from_args(args)
@@ -496,7 +616,7 @@ def main(argv: list[str] | None = None) -> int:
         # produce a 2x video.
         changed = state.compare(job, state.options_of(options))
         if changed:
-            print(f"error: {state.render_mismatch(job, changed)}", file=sys.stderr)
+            print(f"error: {state.render_mismatch(job, changed, from_file)}", file=sys.stderr)
             return EXIT_ERROR
         if state.input_changed(job):
             print(
@@ -521,9 +641,11 @@ def main(argv: list[str] | None = None) -> int:
         frame_format=args.frame_format,
         order=args.order,
         free=work.free_bytes(),
+        blocks=args.blocks,
+        block_margin=args.block_margin,
     )
 
-    print(describe_plan(info, args, output, work, estimate))
+    print(describe_plan(info, args, output, work, estimate, config_path))
     warn_about_space(estimate, args.frame_format)
 
     if args.dry_run:

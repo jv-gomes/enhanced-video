@@ -21,6 +21,8 @@ logger = logging.getLogger(__name__)
 FRAMES_IN = "frames_in"
 FRAMES_UP = "frames_up"
 FRAMES_OUT = "frames_out"
+#: Scratch of block dedup, in the disk estimate only.
+BLOCKS = "blocks"
 #: CFR-normalised copy of a VFR input; also the audio source in that case.
 CFR_NAME = "cfr.mkv"
 #: Chunked-mode directories: the source cut into pieces, the encoded pieces,
@@ -318,6 +320,8 @@ def estimate_disk_usage(
     frame_format: str = config.DEFAULT_FRAME_FORMAT,
     order: str = config.DEFAULT_ORDER,
     free: int = 0,
+    blocks: int = 1,
+    block_margin: int = 0,
 ) -> SpaceEstimate:
     """Estimate the peak disk cost of the intermediate frame directories.
 
@@ -350,5 +354,22 @@ def estimate_disk_usage(
             FRAMES_UP: per_upscaled * frame_count,
             FRAMES_OUT: per_upscaled * interpolated,
         }
+
+    if blocks > 1 and scale > 1:
+        # Imported here because blocks.py reaches this module through extract.
+        from .blocks import grid_tiles, overhead
+
+        # Block scratch: every frame's blocks at both sizes, as PNG whatever
+        # the frame format, with each margin counted again. An upper bound, for
+        # a run in which every frame is new; the cache is bounded separately.
+        grid = grid_tiles(width, height, min(blocks, width, height), block_margin)
+        stages[BLOCKS] = round(
+            overhead(grid)
+            * frame_count
+            * (
+                estimate_frame_bytes(width, height, "png")
+                + estimate_frame_bytes(width * scale, height * scale, "png")
+            )
+        )
 
     return SpaceEstimate(stages=stages, free=free)

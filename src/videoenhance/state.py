@@ -394,17 +394,24 @@ def _settings(job: Job) -> str:
     return ", ".join(parts)
 
 
-def render_mismatch(job: Job, changed: dict[str, tuple[object, object]]) -> str:
+def render_mismatch(
+    job: Job,
+    changed: dict[str, tuple[object, object]],
+    sources: dict[str, str] | None = None,
+) -> str:
     """The message shown when a resume asks for different settings.
 
     It names every difference, because the whole point is that the user cannot
     see from the outside that the parts on disk were made another way.
+    ``sources`` says where a new value came from when that was not the command
+    line, so a changed config file is named as the cause and not left to guess.
     """
     lines = ["this job was started with different options:"]
     width = max(len(OPTION_FLAGS.get(name, name)) for name in changed)
     for name, (recorded, asked) in sorted(changed.items()):
         flag = OPTION_FLAGS.get(name, name)
-        lines.append(f"  {flag.ljust(width)}  {_show(recorded)} -> {_show(asked)}")
+        note = f"  (from {sources[name]})" if sources and name in sources else ""
+        lines.append(f"  {flag.ljust(width)}  {_show(recorded)} -> {_show(asked)}{note}")
 
     if job.chunked:
         lines.append(
