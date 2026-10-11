@@ -39,6 +39,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from videoenhance import config  # noqa: E402
+from videoenhance.blocks import (  # noqa: E402
+    BlockError,
+    Tile,
+    block_hashes,
+    crop_blocks,
+    grid_tiles,
+    overhead,
+    stitch_blocks,
+)
 from videoenhance.config import Binaries, binaries  # noqa: E402
 from videoenhance.probe import probe  # noqa: E402
 from videoenhance.process import ToolError, run  # noqa: E402
@@ -47,58 +56,6 @@ from videoenhance.upscale import ModelError, resolve_model, upscale  # noqa: E40
 #: Below this saving over whole-frame dedup, the extra moving parts are not
 #: worth it. A rule of thumb, not a law: the report prints the numbers too.
 WORTH_IT = 0.15
-
-
-@dataclass(frozen=True)
-class Tile:
-    """One block of the grid, and the region upscaled for it."""
-
-    #: The block itself: the pixels it contributes to the stitched frame.
-    x0: int
-    y0: int
-    x1: int
-    y1: int
-    #: The block plus its margin, clamped to the frame.
-    px0: int
-    py0: int
-    px1: int
-    py1: int
-
-    @property
-    def area(self) -> int:
-        return (self.x1 - self.x0) * (self.y1 - self.y0)
-
-    @property
-    def padded_area(self) -> int:
-        return (self.px1 - self.px0) * (self.py1 - self.py0)
-
-    def crop(self) -> str:
-        """FFmpeg ``crop`` arguments for the padded region."""
-        return f"{self.px1 - self.px0}:{self.py1 - self.py0}:{self.px0}:{self.py0}"
-
-
-def grid_tiles(width: int, height: int, grid: int, margin: int) -> list[Tile]:
-    """Split a ``width`` x ``height`` frame into ``grid`` x ``grid`` blocks."""
-    if grid < 1 or grid > min(width, height):
-        raise ValueError(f"a {grid}x{grid} grid does not fit a {width}x{height} frame")
-    if margin < 0:
-        raise ValueError("the margin cannot be negative")
-    xs = [round(i * width / grid) for i in range(grid + 1)]
-    ys = [round(i * height / grid) for i in range(grid + 1)]
-    return [
-        Tile(
-            xs[col],
-            ys[row],
-            xs[col + 1],
-            ys[row + 1],
-            max(0, xs[col] - margin),
-            max(0, ys[row] - margin),
-            min(width, xs[col + 1] + margin),
-            min(height, ys[row + 1] + margin),
-        )
-        for row in range(grid)
-        for col in range(grid)
-    ]
 
 
 @dataclass(frozen=True)
@@ -148,92 +105,8 @@ def summarize(
         frames=len(frame_hashes),
         distinct_frames=len(set(frame_hashes)),
         block_work=sum(distinct.values()) / frame_area,
-        overhead=sum(tile.padded_area for tile in tiles) / frame_area,
+        overhead=overhead(tiles),
     )
-
-
-def _parse_framemd5(text: str, streams: int) -> list[list[str]]:
-    """Split ``framemd5`` output into one list of hashes per stream."""
-    per_stream: list[list[str]] = [[] for _ in range(streams)]
-    for line in text.splitlines():
-        if not line or line.startswith("#"):
-            continue
-        fields = [field.strip() for field in line.split(",")]
-        per_stream[int(fields[0])].append(fields[-1])
-    return per_stream
-
-
-def hash_blocks(
-    video: Path,
-    tiles: list[Tile],
-    *,
-    start: float,
-    duration: float,
-    bins: Binaries,
-) -> tuple[list[str], list[list[str]]]:
-    """Hash every frame, and every padded block of it, in one FFmpeg pass.
-
-    The frames are converted to RGB first, which is what the pipeline extracts
-    to, and which lets a block start at an odd pixel without chroma rounding.
-    """
-    labels = "".join(f"[t{i}]" for i in range(len(tiles)))
-    graph = [f"[0:v]format=rgb24,split={len(tiles) + 1}[whole]{labels}"]
-    graph += [f"[t{i}]crop={tile.crop()}[c{i}]" for i, tile in enumerate(tiles)]
-    cmd: list[object] = [bins.ffmpeg, "-hide_banner", "-loglevel", "error"]
-    if start:
-        cmd += ["-ss", f"{start:g}"]
-    if duration:
-        cmd += ["-t", f"{duration:g}"]
-    cmd += ["-i", video, "-filter_complex", ";".join(graph), "-map", "[whole]"]
-    for i in range(len(tiles)):
-        cmd += ["-map", f"[c{i}]"]
-    cmd += ["-an", "-f", "framemd5", "-"]
-    streams = _parse_framemd5(run(cmd).stdout or "", len(tiles) + 1)
-    if not streams[0]:
-        raise SystemExit(f"no frames were decoded from {video} in the window asked for")
-    return streams[0], streams[1:]
-
-
-def crop_tiles(frame: Path, tiles: list[Tile], out_dir: Path, bins: Binaries) -> None:
-    """Write each padded block of ``frame`` as ``00000001.png`` onwards."""
-    out_dir.mkdir(parents=True, exist_ok=True)
-    labels = "".join(f"[t{i}]" for i in range(len(tiles)))
-    graph = [f"[0:v]split={len(tiles)}{labels}"]
-    graph += [f"[t{i}]crop={tile.crop()}[c{i}]" for i, tile in enumerate(tiles)]
-    cmd: list[object] = [
-        bins.ffmpeg,
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-y",
-        "-i",
-        frame,
-        "-filter_complex",
-        ";".join(graph),
-    ]
-    for i in range(len(tiles)):
-        cmd += ["-map", f"[c{i}]", "-frames:v", "1", out_dir / f"{i + 1:08d}.png"]
-    run(cmd)
-
-
-def stitch(tile_dir: Path, tiles: list[Tile], scale: int, out: Path, bins: Binaries) -> None:
-    """Cut the margin off each upscaled block and put the frame back together."""
-    cmd: list[object] = [bins.ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
-    for i in range(len(tiles)):
-        cmd += ["-i", tile_dir / f"{i + 1:08d}.png"]
-    graph = []
-    for i, tile in enumerate(tiles):
-        w, h = (tile.x1 - tile.x0) * scale, (tile.y1 - tile.y0) * scale
-        x, y = (tile.x0 - tile.px0) * scale, (tile.y0 - tile.py0) * scale
-        graph.append(f"[{i}:v]crop={w}:{h}:{x}:{y}[s{i}]")
-    if len(tiles) == 1:
-        graph.append("[s0]null[out]")
-    else:
-        inputs = "".join(f"[s{i}]" for i in range(len(tiles)))
-        layout = "|".join(f"{t.x0 * scale}_{t.y0 * scale}" for t in tiles)
-        graph.append(f"{inputs}xstack=inputs={len(tiles)}:layout={layout}[out]")
-    cmd += ["-filter_complex", ";".join(graph), "-map", "[out]", "-frames:v", "1", out]
-    run(cmd)
 
 
 def psnr(a: Path, b: Path, bins: Binaries) -> float:
@@ -335,17 +208,28 @@ def seam_test(
         for margin in args.margins:
             tiles = grid_tiles(width, height, grid, margin)
             name = f"{grid}x{grid}-m{margin}"
-            crop_tiles(frame, tiles, out / name / "in", bins)
+            block_dirs = [out / name / "blocks" / f"{i + 1:03d}" for i in range(len(tiles))]
+            crop_blocks(["-i", frame], tiles, block_dirs, bins)
+            # The upscaler takes one directory, so the blocks are gathered into
+            # it, numbered by position, and handed back to their own directories.
+            gathered, upscaled = out / name / "in", out / name / "out"
+            gathered.mkdir(parents=True)
+            for i, directory in enumerate(block_dirs):
+                shutil.copy(directory / "00000001.png", gathered / f"{i + 1:08d}.png")
             upscale(
-                out / name / "in",
-                out / name / "out",
+                gathered,
+                upscaled,
                 scale=args.scale,
                 model=args.model,
                 gpu=args.gpu,
                 bins=bins,
             )
+            up_dirs = [out / name / "up" / f"{i + 1:03d}" for i in range(len(tiles))]
+            for i, directory in enumerate(up_dirs):
+                directory.mkdir(parents=True)
+                shutil.copy(upscaled / f"{i + 1:08d}.png", directory / "00000001.png")
             stitched = out / f"{name}.png"
-            stitch(out / name / "out", tiles, args.scale, stitched, bins)
+            stitch_blocks(up_dirs, tiles, args.scale, stitched, bins)
             diff_image(stitched, reference, out / f"{name}-diff.png", bins)
             value = psnr(stitched, reference, bins)
             shown = "inf" if value == float("inf") else f"{value:.2f} dB"
@@ -462,14 +346,17 @@ def main(argv: list[str] | None = None) -> int:
     try:
         reports = []
         for grid, tiles in tile_sets:
-            frame_hashes, tile_hashes = hash_blocks(
-                args.input, tiles, start=args.start, duration=args.duration, bins=bins
-            )
+            inputs: list[object] = []
+            if args.start:
+                inputs += ["-ss", f"{args.start:g}"]
+            if args.duration:
+                inputs += ["-t", f"{args.duration:g}"]
+            frame_hashes, tile_hashes = block_hashes([*inputs, "-i", args.input], tiles, bins)
             reports.append(summarize(frame_hashes, tile_hashes, tiles, grid, args.margin))
         print_reuse(reports, info.width, info.height, window)
         if args.seam_test:
             seam_test(args, info.width, info.height, info.duration, bins)
-    except ToolError as exc:
+    except (BlockError, ToolError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     return 0
