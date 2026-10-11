@@ -45,6 +45,20 @@ class ToolError(RuntimeError):
         return "\n".join(lines)
 
 
+class Cancelled(RuntimeError):
+    """The run is being stopped, so this command was refused or cut short.
+
+    Deliberately *not* a :class:`ToolError`. Code that walks a fallback chain
+    catches ``ToolError`` and tries the next tool, which is right for a tool that
+    failed and wrong for one that was stopped: the encoder chain would otherwise
+    answer a Ctrl-C by starting a whole new encode with the next encoder.
+    """
+
+    def __init__(self, cmd: Sequence[str]) -> None:
+        self.cmd = [str(part) for part in cmd]
+        super().__init__(f"{Path(self.cmd[0]).name} was stopped: the run is being cancelled")
+
+
 class MissingToolError(ToolError):
     """An external command could not be found at all."""
 
@@ -103,6 +117,42 @@ def _throttle(proc: subprocess.Popen[str], load: int, stop: threading.Event) -> 
     _set_suspended(proc, False)
 
 
+#: Set while the run is being stopped; see :func:`cancel_all`.
+_CANCELLED = threading.Event()
+#: Children started by :func:`run` that have not exited yet.
+_LIVE: set[subprocess.Popen[str]] = set()
+_LIVE_LOCK = threading.Lock()
+
+
+def cancel_all() -> None:
+    """Stop every command :func:`run` started, and refuse to start new ones.
+
+    A Ctrl-C reaches the main thread as KeyboardInterrupt, but a command running
+    in another thread only sees its child die, which looks like any other
+    failure. This is how the main thread tells those threads the difference:
+    after it, :func:`run` raises :class:`Cancelled` instead of :class:`ToolError`
+    and starts nothing. :func:`reset_cancel` turns it off again.
+    """
+    _CANCELLED.set()
+    with _LIVE_LOCK:
+        live = list(_LIVE)
+    for proc in live:
+        try:
+            proc.terminate()
+        except OSError:
+            pass
+
+
+def reset_cancel() -> None:
+    """Allow :func:`run` to start commands again after :func:`cancel_all`."""
+    _CANCELLED.clear()
+
+
+def cancelling() -> bool:
+    """Whether :func:`cancel_all` is in effect."""
+    return _CANCELLED.is_set()
+
+
 def run(
     cmd: Sequence[object],
     *,
@@ -131,6 +181,7 @@ def run(
         MissingToolError: The executable does not exist.
         ToolError: The command exited non-zero and ``check`` is true, or it
             exceeded ``timeout``.
+        Cancelled: :func:`cancel_all` was called before or while it ran.
     """
     argv = [str(part) for part in cmd]
     if not argv:
@@ -140,19 +191,11 @@ def run(
         raise ValueError("load must be between 1 and 100")
 
     logger.debug("running: %s", format_cmd(argv))
+    if _CANCELLED.is_set():
+        raise Cancelled(argv)
 
     try:
-        if load < 100:
-            completed = _run_throttled(argv, load, capture, cwd, timeout)
-        else:
-            completed = subprocess.run(  # noqa: S603 - argv list, never shell=True
-                argv,
-                capture_output=capture,
-                text=True,
-                cwd=str(cwd) if cwd else None,
-                timeout=timeout,
-                check=False,
-            )
+        completed = _spawn(argv, load, capture, cwd, timeout)
     except FileNotFoundError as exc:
         raise MissingToolError(argv) from exc
     except subprocess.TimeoutExpired as exc:
@@ -160,38 +203,58 @@ def run(
         detail = stderr or f"timed out after {timeout}s"
         raise ToolError(argv, returncode=-1, stderr=detail) from exc
 
+    if _CANCELLED.is_set():
+        # Whatever the exit code, a command that ended while the run was being
+        # stopped did not fail on its own, and must not be retried as if it had.
+        raise Cancelled(argv)
+
     if check and completed.returncode != 0:
         raise ToolError(argv, completed.returncode, completed.stderr or "")
 
     return completed
 
 
-def _run_throttled(
+def _spawn(
     argv: list[str], load: int, capture: bool, cwd: Path | None, timeout: float | None
 ) -> subprocess.CompletedProcess[str]:
+    """Start ``argv``, keep it registered while it runs, and wait for it.
+
+    Registered so that :func:`cancel_all` can reach it from another thread, and
+    throttled below ``load`` 100 by a helper thread that pauses it.
+    """
     pipe = subprocess.PIPE if capture else None
     proc = subprocess.Popen(  # noqa: S603 - argv list, never shell=True
         argv, stdout=pipe, stderr=pipe, text=True, cwd=str(cwd) if cwd else None
     )
+    with _LIVE_LOCK:
+        _LIVE.add(proc)
     stop = threading.Event()
-    thread = threading.Thread(target=_throttle, args=(proc, load, stop), daemon=True)
-    thread.start()
+    thread = None
+    if load < 100:
+        thread = threading.Thread(target=_throttle, args=(proc, load, stop), daemon=True)
+        thread.start()
     try:
         stdout, stderr = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         stop.set()
-        thread.join()
+        if thread:
+            thread.join()
         proc.kill()
         stdout, stderr = proc.communicate()
         raise subprocess.TimeoutExpired(argv, timeout, output=stdout, stderr=stderr) from None
     except BaseException:
         stop.set()
-        thread.join()
+        if thread:
+            thread.join()
         proc.kill()
+        proc.wait()
         raise
     finally:
         stop.set()
-        thread.join()
+        if thread:
+            thread.join()
+        with _LIVE_LOCK:
+            _LIVE.discard(proc)
     return subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
 
 

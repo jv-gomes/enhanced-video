@@ -89,3 +89,57 @@ def test_throttled_run_still_reports_failure():
 def test_run_rejects_a_load_outside_1_to_100(load: int):
     with pytest.raises(ValueError, match="load"):
         run([sys.executable, "-c", "pass"], load=load)
+
+
+# --------------------------------------------------------------------------
+# cancelling
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def clean_cancel():
+    from videoenhance.process import reset_cancel
+
+    reset_cancel()
+    yield
+    reset_cancel()
+
+
+def test_nothing_starts_once_the_run_is_cancelled(clean_cancel):
+    from videoenhance.process import Cancelled, cancel_all, cancelling, reset_cancel
+
+    cancel_all()
+    assert cancelling()
+    with pytest.raises(Cancelled):
+        run([sys.executable, "-c", "pass"])
+
+    reset_cancel()
+    assert run([sys.executable, "-c", "print('again')"]).stdout.strip() == "again"
+
+
+def test_cancelling_stops_a_command_running_in_another_thread(clean_cancel):
+    """And says Cancelled, not ToolError, so no fallback chain retries it."""
+    import threading
+    import time
+
+    from videoenhance.process import Cancelled, cancel_all
+
+    outcome: dict[str, object] = {}
+
+    def slow() -> None:
+        try:
+            run([sys.executable, "-c", "import time; time.sleep(30)"])
+        except BaseException as exc:  # noqa: BLE001 - recorded for the assertion
+            outcome["error"] = exc
+
+    thread = threading.Thread(target=slow)
+    thread.start()
+    time.sleep(0.5)
+    start = time.monotonic()
+    cancel_all()
+    thread.join(timeout=10)
+
+    assert not thread.is_alive()
+    assert time.monotonic() - start < 5
+    assert isinstance(outcome["error"], Cancelled)
+    assert not isinstance(outcome["error"], ToolError)
