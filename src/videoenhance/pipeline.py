@@ -51,6 +51,7 @@ __all__ = [
     "FRAMES_IN",
     "FRAMES_OUT",
     "FRAMES_UP",
+    "Generated",
     "ORDERS",
     "ORDER_INTERPOLATE_FIRST",
     "ORDER_UPSCALE_FIRST",
@@ -62,9 +63,11 @@ __all__ = [
     "count_frames_on_disk",
     "estimate_disk_usage",
     "estimate_frame_bytes",
+    "finish",
     "frame_glob",
     "frame_pattern",
     "frames_complete",
+    "generate",
     "human_bytes",
     "run_pipeline",
     "stage_is_done",
@@ -311,6 +314,22 @@ def stage_order(order: str = config.DEFAULT_ORDER) -> tuple[str, ...]:
     raise ValueError(f"unknown stage order: {order!r} (expected one of {', '.join(ORDERS)})")
 
 
+@dataclass(frozen=True)
+class Generated:
+    """The frames a run has made, waiting to be encoded.
+
+    The boundary between the half of a run that needs the GPU and the half
+    that does not, so that a chunked run can encode one chunk while the GPU is
+    already generating the next.
+    """
+
+    frames: _Frames
+    stages: list[Stage]
+    #: Where the final encode takes its audio from, or ``None`` for none.
+    audio_source: Path | None
+    work: WorkDir
+
+
 def run_pipeline(
     input_path: Path,
     output: Path,
@@ -333,12 +352,31 @@ def run_pipeline(
             one of :data:`ORDERS`.
     """
     options = options or Options()
-    order = stage_order(options.order)
     info = info or probe(input_path)
     output = Path(output)
     if output.resolve() == Path(info.path).resolve():
         raise ValueError(f"refusing to overwrite the input video: {output}")
+    generated = generate(input_path, options, info=info, work=work, bins=bins)
+    return finish(generated, output, options, bins=bins)
 
+
+def generate(
+    input_path: Path,
+    options: Options | None = None,
+    *,
+    info: VideoInfo | None = None,
+    work: WorkDir | None = None,
+    bins: Binaries | None = None,
+) -> Generated:
+    """Extract the frames and run the GPU stages, stopping short of the encode.
+
+    Raises:
+        FileNotFoundError: the input does not exist.
+        ValueError: the order is not one of :data:`ORDERS`.
+    """
+    options = options or Options()
+    order = stage_order(options.order)
+    info = info or probe(input_path)
     work = (work or WorkDir.for_input(info.path)).create()
     stages: list[Stage] = []
 
@@ -369,13 +407,37 @@ def run_pipeline(
     for name in order:
         frames = _MODEL_STAGES[name](frames, work, options, stages, bins)
 
+    return Generated(
+        frames=frames,
+        stages=stages,
+        audio_source=(
+            extracted.audio_source if extracted.has_audio and options.mux_audio else None
+        ),
+        work=work,
+    )
+
+
+def finish(
+    generated: Generated,
+    output: Path,
+    options: Options | None = None,
+    *,
+    bins: Binaries | None = None,
+) -> Result:
+    """Encode what :func:`generate` made and clear its scratch space.
+
+    Uses no GPU compute, only FFmpeg (and the video engine of the card, when a
+    hardware encoder is picked), which is why it can run beside the next
+    :func:`generate`.
+    """
+    options = options or Options()
+    output = Path(output)
+    frames, work = generated.frames, generated.work
     encoder = encode(
         frames.directory,
         output,
         fps=frames.fps,
-        audio_source=(
-            extracted.audio_source if extracted.has_audio and options.mux_audio else None
-        ),
+        audio_source=generated.audio_source,
         frame_format=options.frame_format,
         prefer=options.prefer_encoder,
         allow_hardware=options.allow_hardware,
@@ -393,7 +455,7 @@ def run_pipeline(
         encoder=encoder.name,
         fps=frames.fps,
         frames=frames.count,
-        stages=stages,
+        stages=generated.stages,
         work=work.root,
         kept=kept,
     )
