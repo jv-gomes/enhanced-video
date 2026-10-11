@@ -241,7 +241,7 @@ def upscale(
                     raise VramError(
                         f"the GPU ran out of memory at every tile size tried "
                         f"({', '.join(str(a) for a in attempts)}); try "
-                        f"--frame-format jpg, a smaller --scale, or a lower -j"
+                        f"--tile 64, a smaller --scale, or close what else is using the GPU"
                     ) from exc
                 raise
             continue

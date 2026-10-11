@@ -85,10 +85,10 @@ mv /tmp/rife/rife-ncnn-vulkan-20221029-ubuntu/* bin/rife/
 chmod +x bin/realesrgan/realesrgan-ncnn-vulkan bin/rife/rife-ncnn-vulkan
 ```
 
-The RIFE zip is about 430 MB because it carries every model. Only `rife-v4.6`,
-the default, is needed; the others are selected with `--rife-model` and can be
-deleted if you do not use them. The Real-ESRGAN zip also has two demo images and
-a video that can go.
+The RIFE zip is about 430 MB because it carries every model. Only `rife-v4.6`
+is needed: it is the default, and the command line has no option to pick another
+one yet, so the rest can be deleted. The Real-ESRGAN zip also has two demo
+images and a video that can go.
 
 Executables that live somewhere else are found through `REALESRGAN_BIN` and
 `RIFE_BIN`, and a `realesrgan-ncnn-vulkan` or `rife-ncnn-vulkan` on `PATH` is
