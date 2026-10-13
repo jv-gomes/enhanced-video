@@ -53,14 +53,11 @@ from .workdir import SLOTS, WorkDir, human_bytes
 
 logger = logging.getLogger(__name__)
 
-#: Chunks and parts are Matroska: it takes any codec the source might use, so
-#: cutting with ``-c copy`` never has to re-container, and it holds the output
-#: of any encoder in the chain.
+#: Matroska takes any source codec and the output of any encoder in the chain.
 CHUNK_SUFFIX = ".mkv"
 PART_SUFFIX = ".mkv"
-#: A chunk longer than this multiple of the requested length means the cut
-#: could not land where it was asked to, because ``-c copy`` can only cut on
-#: keyframes. Such a chunk is re-cut with a lossless re-encode.
+#: A chunk longer than this multiple of the requested length is re-cut with a
+#: lossless re-encode, since ``-c copy`` can only cut on keyframes.
 OVERSIZE_FACTOR = 2.0
 
 
@@ -81,12 +78,10 @@ class ChunkPlan:
     has_audio: bool
     #: True when the chunks were already on disk and nothing was re-cut.
     skipped: bool = False
-    #: Chunks that had to be re-cut with a re-encode because the source's
-    #: keyframes were too far apart.
+    #: Chunks that had to be re-cut with a re-encode.
     recut: int = 0
-    #: The job record as it stands after the cut was written to it. ``Job`` is
-    #: frozen, so a caller holding the one it passed in would be holding a
-    #: stale copy and its next save would wipe the cut back out.
+    #: The job record after the cut was written to it; ``Job`` is frozen, so
+    #: the caller's copy is stale and saving it would wipe the cut.
     job: Job | None = None
 
     def __len__(self) -> int:
@@ -483,10 +478,8 @@ def run_chunked(
         bins=bins,
     )
 
-    # Count the frames in the joined file rather than adding up the parts this
-    # run happened to encode: on a resumed run most of them were encoded days
-    # ago, and a summary saying "1800 frames" about a 5400-frame video is a lie
-    # that would make a resume look like it lost something.
+    # Count the joined file, not this run's parts: a resumed run encoded most
+    # of them earlier.
     total_frames = _joined_frame_count(output, bins) or total_frames
 
     stages = [

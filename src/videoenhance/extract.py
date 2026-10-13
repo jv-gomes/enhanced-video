@@ -17,7 +17,7 @@ from pathlib import Path
 
 from . import config
 from .config import Binaries, binaries
-from .probe import VideoInfo, probe
+from .probe import VideoInfo
 from .process import run
 from .workdir import WorkDir, count_frames_on_disk, frame_pattern, stage_is_done
 
@@ -193,13 +193,3 @@ def extract(
         )
     logger.info("extracted %d frames", count)
     return result(count)
-
-
-def extract_file(
-    path: Path,
-    work: WorkDir | None = None,
-    **kwargs: object,
-) -> ExtractResult:
-    """Convenience wrapper that probes ``path`` first."""
-    info = probe(path)
-    return extract(info, work or WorkDir.for_input(info.path), **kwargs)  # type: ignore[arg-type]

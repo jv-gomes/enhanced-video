@@ -31,68 +31,54 @@ UPSCALE_MODELS: dict[str, tuple[int, ...]] = {
 DEFAULT_UPSCALE_MODEL = "realesr-animevideov3"
 DEFAULT_RIFE_MODEL = "rife-v4.6"
 
-#: Upscale before interpolating. The default, and the cheaper one: Real-ESRGAN
-#: is the expensive stage, so it should run before RIFE multiplies the frame
-#: count.
+#: Upscale first: Real-ESRGAN is the expensive stage, so it runs before RIFE
+#: multiplies the frame count.
 ORDER_UPSCALE_FIRST = "upscale-first"
-#: Interpolate at the source resolution first. Slower overall, but RIFE sees
-#: the original pixels rather than Real-ESRGAN's reconstruction of them, which
-#: some people prefer on live-action footage.
+#: Interpolate at the source resolution first. Slower, but RIFE sees the
+#: original pixels.
 ORDER_INTERPOLATE_FIRST = "interpolate-first"
 ORDERS = (ORDER_UPSCALE_FIRST, ORDER_INTERPOLATE_FIRST)
 DEFAULT_ORDER = ORDER_UPSCALE_FIRST
 
-#: Blocks per side for block dedup. 1 means whole frames only, which is what
-#: dedup did before blocks existed. Off by default because every block carries
-#: a margin, so on footage with nothing static in it a grid does more GPU work
-#: than whole frames; the saving is measured first with
-#: ``scripts/measure_tile_reuse.py``.
+#: Blocks per side for block dedup; 1 means whole frames only. Off by default:
+#: the margins can make a grid cost more than whole frames, so measure with
+#: ``scripts/measure_tile_reuse.py`` first.
 DEFAULT_BLOCKS = 1
-#: Pixels of neighbours upscaled with each block so that stitching leaves no
-#: seams: with none the seams measured 47.7 dB and were visible along every
-#: edge, with 8 and above over 60 dB.
+#: Pixels of neighbours upscaled with each block so the stitching leaves no
+#: seams (47.7 dB with none, over 60 dB from 8 up).
 DEFAULT_BLOCK_MARGIN = 16
 
 DEFAULT_SCALE = 2
 DEFAULT_TARGET_FPS = 60
 DEFAULT_FRAME_FORMAT = "png"
 
-#: Reuse an upscaled frame whenever the same pixels come round again. Lossless
-#: for the output, because Real-ESRGAN is deterministic, and worth a lot on cel
-#: animation, where a drawing is held for two or three frames. Grainy live
-#: action has almost no exact repeats and simply pays the hashing cost.
+#: Reuse an upscaled frame whenever the same pixels come round again. Lossless,
+#: since Real-ESRGAN is deterministic.
 DEFAULT_DEDUP = True
-#: Ceiling for the upscaled-frame cache that outlives each chunk, in bytes.
-#: Without one, a long video's unique frames would accumulate for the whole run
-#: and undo the point of processing in chunks. 0 means no ceiling.
+#: Ceiling for the upscaled-frame cache that outlives each chunk, in bytes;
+#: 0 means no ceiling.
 DEFAULT_CACHE_SIZE = 2 * 1024**3
 
-#: Seconds of video processed per chunk. The frames of one chunk are the whole
-#: disk cost of a run, so this is what keeps a two-hour film from needing
-#: hundreds of gigabytes of scratch space. 0 disables chunking and processes
-#: the file in a single pass.
+#: Seconds of video processed per chunk; the frames of one chunk are the whole
+#: disk cost of a run. 0 disables chunking.
 DEFAULT_CHUNK_SECONDS = 30.0
-#: Encode one chunk while the next is generated. The GPU stages and the encode
-#: use different parts of the machine, so running them side by side keeps the
-#: GPU busy instead of idle through every encode; the price is a second chunk
-#: of frames on disk.
+#: Encode one chunk while the next is generated, at the price of a second
+#: chunk of frames on disk.
 DEFAULT_OVERLAP = True
 FRAME_FORMATS = ("png", "jpg")
 FRAME_PATTERN = "%08d"
 
-#: ``-g``: GPU device id. 0 is the first Vulkan device; make sure it is the
-#: dedicated AMD card on machines that also have an integrated GPU.
+#: ``-g``: GPU device id. Make sure it is the dedicated card when there is also
+#: an integrated one.
 DEFAULT_GPU_ID = 0
 #: ``-t``: tile size, 0 meaning automatic. Lower it on Vulkan OOM errors.
 DEFAULT_TILE_SIZE = 0
 #: Tile sizes to retry with when the GPU runs out of memory.
 TILE_FALLBACKS = (256, 128)
-#: Share of the time the GPU binaries are allowed to run, in percent. The
-#: NCNN tools have no throttle of their own, so ``process.run`` pauses the
-#: process for the rest of each cycle; 100 means no limit.
+#: Share of the time the GPU binaries may run, in percent; ``process.run``
+#: pauses them for the rest of each cycle. 100 means no limit.
 DEFAULT_GPU_LOAD = 100
-#: Length of one run-then-pause cycle, in seconds. Short enough that the card
-#: visibly idles between bursts, long enough that suspending costs nothing.
+#: Length of one run-then-pause cycle, in seconds.
 THROTTLE_CYCLE = 0.5
 #: ``-j``: load:proc:save thread counts.
 DEFAULT_THREADS = "1:2:2"
@@ -166,8 +152,3 @@ def binaries() -> Binaries:
 def rife_model_dir(name: str = DEFAULT_RIFE_MODEL, bins: Binaries | None = None) -> Path:
     """Path of a RIFE model directory, which is passed to the binary via ``-m``."""
     return (bins or binaries()).rife_models / name
-
-
-def scale_supported(model: str, scale: int) -> bool:
-    """Whether ``model`` can upscale by ``scale``."""
-    return scale in UPSCALE_MODELS.get(model, ())

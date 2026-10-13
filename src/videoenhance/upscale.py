@@ -78,13 +78,6 @@ def resolve_model(model: str, scale: int) -> tuple[str, int]:
     return model, scale
 
 
-def models_for_scale(scale: int) -> list[str]:
-    """Every model that can upscale by ``scale``."""
-    return sorted(
-        name for name, scales in config.UPSCALE_MODELS.items() if scale in scales
-    )
-
-
 @dataclass(frozen=True)
 class UpscaleResult:
     """What the upscale stage produced."""

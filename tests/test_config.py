@@ -46,15 +46,8 @@ def test_exe_suffix_only_on_windows(monkeypatch: pytest.MonkeyPatch):
     assert config._exe("rife-ncnn-vulkan") == "rife-ncnn-vulkan"
 
 
-def test_scale_support_matches_model_table():
-    assert config.scale_supported("realesr-animevideov3", 2)
-    assert config.scale_supported("realesrgan-x4plus", 4)
-    assert not config.scale_supported("realesrgan-x4plus", 2)
-    assert not config.scale_supported("unknown-model", 4)
-
-
 def test_defaults_are_sane():
     assert config.DEFAULT_UPSCALE_MODEL in config.UPSCALE_MODELS
     assert config.DEFAULT_FRAME_FORMAT in config.FRAME_FORMATS
-    assert config.scale_supported(config.DEFAULT_UPSCALE_MODEL, config.DEFAULT_SCALE)
+    assert config.DEFAULT_SCALE in config.UPSCALE_MODELS[config.DEFAULT_UPSCALE_MODEL]
     assert config.TILE_FALLBACKS == tuple(sorted(config.TILE_FALLBACKS, reverse=True))

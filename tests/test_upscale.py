@@ -18,7 +18,6 @@ from videoenhance.upscale import (
     UpscaleError,
     VramError,
     looks_like_vram_exhaustion,
-    models_for_scale,
     resolve_model,
     tile_attempts,
     upscale,
@@ -81,12 +80,6 @@ def test_rejection_names_a_model_that_can_do_it():
 def test_resolve_model_rejects_an_unknown_model():
     with pytest.raises(ModelError, match="unknown model"):
         resolve_model("not-a-model", 4)
-
-
-def test_models_for_scale_matches_the_config_table():
-    assert models_for_scale(2) == ["realesr-animevideov3"]
-    assert len(models_for_scale(4)) == len(config.UPSCALE_MODELS)
-    assert models_for_scale(8) == []
 
 
 def test_tile_attempts_walk_down_from_the_request():
